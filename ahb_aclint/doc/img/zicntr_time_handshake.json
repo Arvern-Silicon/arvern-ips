@@ -1,0 +1,25 @@
+{signal: [
+  {name: 'cycle #',                 wave: '==========', data: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']},
+  {name: 'hclk_i',                  wave: 'p.........'},
+  {},
+  ['core',
+    {name: 'csrr time in EX',       wave: '01...0....'},
+    {name: 'time_req_o',            wave: '01...0....'},
+    {name: 'time_gnt_i',            wave: '0...10....'},
+    {name: 'time_val_i',            wave: '=...=.....', data: ['stale shadow', 'fresh MTIME snapshot']},
+    {name: 'time_gnt_r',            wave: '0....10...'},
+    {name: 'ex_csr_ready_o',        wave: '10...1....'}
+  ],
+  {},
+  ['aclint',
+    {name: 'time_req_i',            wave: '01...0....'},
+    {name: 'fsm_state',             wave: '3.5.3.....', data: ['IDLE', 'TIME_PEND', 'IDLE']},
+    {name: 'pend_1 (warmup 1)',     wave: '0.10......'},
+    {name: 'pend_2 = mtime_valid',  wave: '0..10.....'},
+    {name: 'mtime_shadow_zicntr',   wave: '=...=.....', data: ['stale', 'fresh snapshot']},
+    {name: 'time_gnt_o',            wave: '0...10....'},
+    {name: 'time_val_o',            wave: '=...=.....', data: ['stale', 'fresh snapshot']}
+  ]
+],
+  config: { hscale: 3 }
+}

@@ -1,0 +1,38 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      arv_custom_csr.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:arv_custom_csr:1.0
+description: Custom-CSR peripheral for the arvern CPU (read-only / read-write CSR primitives).
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    depend:
+      - arvern:ips:arv_common:1.0
+    files:
+      - rtl/verilog/arv_ccsr_rdwr.v
+      - rtl/verilog/arv_ccsr_rdonly.v
+      - rtl/verilog/arv_custom_csr.v
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_custom_csr

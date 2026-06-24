@@ -1,0 +1,113 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    runsim
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : runsim
+# Module Description : Run a single RTL simulation by test name (with
+#                      optional random seed).
+#----------------------------------------------------------------------------
+
+###############################################################################
+#                            Parse arguments                                  #
+###############################################################################
+testname=""
+seed=""
+while [[ $# > 0 ]]; do
+    key="$1"
+    shift
+    case $key in
+	-seed)
+	    seed="$1"
+	    ;;
+	*)
+            testname="$key"
+	    ;;
+    esac
+done
+
+###############################################################################
+#                            Parameter Check                                  #
+###############################################################################
+if [ "$testname" == "" ]; then
+  echo "ERROR	 : missing argument"
+  echo "USAGE	 : runsim <test name> [-seed <seed_nr>]"
+  echo "Example	 : runsim simple_rdwr"
+  echo ""
+  echo "In order to switch the verilog simulator, the VERILOG_SIMULATOR environment"
+  echo "variable can be set to the following values:"
+  echo ""
+  echo "		  - iverilog  : Icarus Verilog	(default)"
+  echo "		  - cver      : CVer"
+  echo "		  - verilog   : Verilog-XL"
+  echo "		  - ncverilog : NC-Verilog"
+  echo "		  - vcs	      : VCS"
+  echo "		  - vsim      : Modelsim"
+  echo "		  - isim      : Xilinx simulator"
+  echo ""
+  exit 1
+fi
+
+# Generate random seed if not specified
+if [ "$seed" == "" ]; then
+    seed=`od -A n -t d -N 4 /dev/urandom`
+fi
+
+###############################################################################
+#                     Check if the required files exist                       #
+###############################################################################
+verfile=../src/$testname.v;
+submitfile=../../../bench/verilog/submit.f;
+if [ "$VERILOG_SIMULATOR" == "isim" ]; then
+    submitfile=../../../bench/verilog/submit.prj;
+fi
+
+if [ ! -e $verfile ]; then
+    echo "Verilog stimulus file $verfile doesn't exist: $verfile"
+    exit 1
+fi
+if [ ! -e $submitfile ]; then
+    echo "Verilog submit file $submitfile doesn't exist: $submitfile"
+    exit 1
+fi
+
+
+###############################################################################
+#                               Cleanup                                       #
+###############################################################################
+echo "Cleanup..."
+rm -rf *.vcd
+rm -rf *.vpd
+rm -rf *.trn
+rm -rf *.dsn
+rm -rf stimulus.v
+
+
+###############################################################################
+#                              Run simulation                                 #
+###############################################################################
+echo " ======================================================="
+echo "| Start simulation:             $testname"
+echo " ======================================================="
+echo ""
+echo " Seed: $seed"
+echo ""
+
+# Create links
+if [[ $(uname -s) == CYGWIN* ]];
+then
+    cp $verfile stimulus.v
+else
+    ln -s $verfile stimulus.v
+fi
+
+# Start verilog simulation
+echo "Start Verilog simulation..."
+../bin/rtlsim.sh    stimulus.v $submitfile $seed

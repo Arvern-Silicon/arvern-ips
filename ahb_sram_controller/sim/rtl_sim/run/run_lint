@@ -1,0 +1,5 @@
+#!/bin/bash
+
+../bin/flatten_filelist.py ../../../rtl/verilog/filelist.f submit_lint.f
+
+verilator --lint-only --top ahb_sram_controller -Wall -Wpedantic waivers.vlt -f submit_lint.f

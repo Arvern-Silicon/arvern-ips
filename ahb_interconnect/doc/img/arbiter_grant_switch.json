@@ -1,0 +1,33 @@
+{
+  "signal": [
+    { "name": "hclk_i",                "wave": "p......." },
+    [ "M0/M1 Arbitration",
+      { "name": "m_request_o[m0]",     "wave": "0.10...." },
+      { "name": "m_grant_i[m0]",       "wave": "0.10...." },
+      { "name": "m_request_o[m1]",     "wave": "0.1.0..." },
+      { "name": "m_grant_i[m1]",       "wave": "0..10..." }
+    ],
+    [ "M0 (read S0 @ 0x10)",
+      { "name": "m_htrans_i[m0]",      "wave": "x.3x....", "data": ["NONSEQ"] },
+      { "name": "m_haddr_i[m0]",       "wave": "x.3x....", "data": ["0x10"] },
+      { "name": "m_hready_o[m0]",      "wave": "1......." },
+      { "name": "m_hrdata_o[m0]",      "wave": "0..30...", "data": ["S0[0x4]"] }
+    ],
+    [ "M1 (write S1 @ 0x20, DPH extended 1 cycle)",
+      { "name": "m_htrans_i[m1]",      "wave": "x.4x....", "data": ["NONSEQ"] },
+      { "name": "m_haddr_i[m1]",       "wave": "x.4x....", "data": ["0x20"] },
+      { "name": "m_hwrite_i[m1]",      "wave": "x.1x...." },
+      { "name": "m_hwdata_i[m1]",      "wave": "x..4.x..", "data": ["write data (held)"] },
+      { "name": "m_hready_o[m1]",      "wave": "1..01..." },
+      { "name": "m_aph_pending (IF)",  "wave": "x..4x...", "data": ["latched APH"] }
+    ],
+    [ "Fabric / bus",
+      { "name": "s_hsel_o[s0]",        "wave": "0.10...." },
+      { "name": "s_hsel_o[s1]",        "wave": "0..10..." },
+      { "name": "s_haddr_o",           "wave": "x.34x...", "data": ["0x10","0x20"] }
+    ],
+    {}
+  ],
+  "head": { "text": "Arbitrated grant switch: M0 wins cycle 2; M1's APH is captured into m_aph_pending and replayed cycle 3" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

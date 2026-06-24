@@ -1,0 +1,24 @@
+{
+  "signal": [
+    { "name": "hclk_i",       "wave": "p......" },
+    [ "AHB",
+      { "name": "hsel_i",       "wave": "0.10..." },
+      { "name": "htrans_i[1:0]","wave": "x.4x...", "data": ["NONSEQ"] },
+      { "name": "haddr_i",      "wave": "x.4x...", "data": ["0x10"] },
+      { "name": "hwrite_i",     "wave": "x.0x..." },
+      { "name": "hreadyout_o",  "wave": "1......" },
+      { "name": "hrdata_o",     "wave": "0..40..", "data": ["mem[0x4]"] }
+    ],
+    [ "ROM",
+      { "name": "rom_cen_o",    "wave": "1.01..." },
+      { "name": "rom_addr_o",   "wave": "x.4x...", "data": ["0x4"] },
+      { "name": "rom_dout_i",   "wave": "x..4x..", "data": ["mem[0x4]"] }
+    ],
+    [ "internal",
+      { "name": "aph_read",     "wave": "0.10..." },
+      { "name": "rd_active",    "wave": "0..10.." }
+    ]
+  ],
+  "head": { "text": "Single AHB read: one-cycle ROM latency" },
+  "config": { "hscale": 2 }
+}

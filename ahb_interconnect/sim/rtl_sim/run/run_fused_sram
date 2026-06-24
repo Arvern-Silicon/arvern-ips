@@ -1,0 +1,73 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_fused_sram
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_fused_sram
+# Module Description : Run wrapper for the fused-SRAM testbench variant.
+#----------------------------------------------------------------------------
+
+VERILOG_SIMULATOR=${VERILOG_SIMULATOR:-iverilog}
+SIMULATION_NODUMP=${SIMULATION_NODUMP:-0}
+
+SUBMITFILE=../../../bench/verilog/submit_fused_sram.f
+
+# ----- Parse arguments (currently only -seed N) ------------------------------
+seed=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -seed)
+            seed="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $(basename "$0") [-seed N]"
+            echo "  -seed N    Pin \$urandom seed for reproducibility."
+            echo "             Without -seed, a fresh random seed is drawn"
+            echo "             from /dev/urandom and printed at sim start."
+            exit 0
+            ;;
+        *)
+            echo "[WARN] Unknown argument: $1 (ignored)"
+            shift
+            ;;
+    esac
+done
+if [ -z "$seed" ]; then
+    seed=$(od -A n -t u4 -N 4 /dev/urandom | tr -d ' \n')
+fi
+
+echo " ======================================================="
+echo "| Start simulation: ahb_fused_sram_ctrl unit testbench  |"
+echo "| seed = $seed"
+echo " ======================================================="
+echo ""
+
+rm -rf simv *.vcd
+
+if [ "$VERILOG_SIMULATOR" = "iverilog" ]; then
+    NODUMP_FLAG=""
+    [ "$SIMULATION_NODUMP" -eq 1 ] && NODUMP_FLAG="-D NODUMP"
+
+    # Flatten the submit filelist to absolute paths (Option-2 portable form).
+    FLATTEN_PY="$(dirname "$(realpath "$0")")/../bin/flatten_filelist.py"
+    "$FLATTEN_PY" "$SUBMITFILE" ./submit_sim.f >/dev/null
+    SUBMITFILE=./submit_sim.f
+
+    iverilog -o simv -c $SUBMITFILE $NODUMP_FLAG -D SEED=$seed
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] Compilation failed."
+        exit 1
+    fi
+    ./simv
+else
+    echo "ERROR: Only iverilog is supported by this script."
+    exit 1
+fi

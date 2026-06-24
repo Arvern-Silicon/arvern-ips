@@ -1,0 +1,32 @@
+{
+  "signal": [
+    { "name": "hclk_i",        "wave": "p......" },
+    [ "AHB",
+      { "name": "hsel_i",        "wave": "0.10..." },
+      { "name": "htrans_i[1:0]", "wave": "x.3x...", "data": ["NONSEQ"] },
+      { "name": "haddr_i",       "wave": "x.3x...", "data": ["0x00"] },
+      { "name": "hwrite_i",      "wave": "x.1x..." },
+      { "name": "hsize_i[1:0]",  "wave": "x.3x...", "data": ["WORD"] },
+      { "name": "hprot_i[1]",    "wave": "x.1x...", "data": ["priv"] },
+      { "name": "hsmode_i",      "wave": "x.0x..." },
+      { "name": "hwdata_i",      "wave": "x..3x..", "data": ["0xDEADBEEF"] },
+      { "name": "hreadyout_o",   "wave": "1......" },
+      { "name": "hresp_o",       "wave": "0......" }
+    ],
+    [ "internal",
+      { "name": "dph_valid",     "wave": "0..10.." },
+      { "name": "dph_write",     "wave": "0..10.." },
+      { "name": "dph_addr",      "wave": "x..3x..", "data": ["0x00"] },
+      { "name": "dph_byte_mask", "wave": "x..3x..", "data": ["0xF"] },
+      { "name": "reg_wr[REGOUT_00]", "wave": "0..10.." },
+      { "name": "reg_wr_allowed","wave": "1......" }
+    ],
+    [ "register",
+      { "name": "regout_00",     "wave": "2...3..", "data": ["0x0000_0000","0xDEADBEEF"] },
+      { "name": "register_00_o", "wave": "2...3..", "data": ["0x0000_0000","0xDEADBEEF"] }
+    ],
+    {}
+  ],
+  "head": { "text": "Simple write: REGOUT_00 := 0xDEADBEEF (M-mode)" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

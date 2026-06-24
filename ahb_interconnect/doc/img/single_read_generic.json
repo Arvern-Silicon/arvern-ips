@@ -1,0 +1,27 @@
+{
+  "signal": [
+    { "name": "hclk_i",            "wave": "p......." },
+    [ "M0 (read 0x10 from S0)",
+      { "name": "m_htrans_i[m0]",  "wave": "x.3x....", "data": ["NONSEQ"] },
+      { "name": "m_haddr_i[m0]",   "wave": "x.3x....", "data": ["0x10"] },
+      { "name": "m_hwrite_i[m0]",  "wave": "x.0x...." },
+      { "name": "m_request_o[m0]", "wave": "0.10...." },
+      { "name": "m_grant_i[m0]",   "wave": "0.10...." },
+      { "name": "m_hready_o[m0]",  "wave": "1......." },
+      { "name": "m_hrdata_o[m0]",  "wave": "0..30...", "data": ["mem[0x4]"] }
+    ],
+    [ "Fabric internals",
+      { "name": "s_decoder_addr_o","wave": "x.3x....", "data": ["0x10"] },
+      { "name": "s_decoder_1hot_i","wave": "x.3x....", "data": ["S0"] },
+      { "name": "s_hsel_o[s0]",    "wave": "0.10...." },
+      { "name": "s_haddr_o[s0]",   "wave": "x.3x....", "data": ["0x10"] }
+    ],
+    [ "Slave 0 (subordinate)",
+      { "name": "s_hreadyout_i[s0]","wave": "1......." },
+      { "name": "s_hrdata_i[s0]",   "wave": "x..3x...", "data": ["mem[0x4]"] }
+    ],
+    {}
+  ],
+  "head": { "text": "Single read through the generic fabric" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

@@ -1,0 +1,27 @@
+{
+  "signal": [
+    { "name": "hclk_i",                  "wave": "p......" },
+    [ "M_X (instr fetch from ROM)",
+      { "name": "m_x_htrans_i",          "wave": "x.3x...",   "data": ["NONSEQ"] },
+      { "name": "m_x_haddr_i",           "wave": "x.3x...",   "data": ["0x0040_0010"] },
+      { "name": "m_x_hwrite_i",          "wave": "x.0x..." },
+      { "name": "m_x_hready_o",          "wave": "1......" },
+      { "name": "m_x_hrdata_o",          "wave": "0..30..",   "data": ["ROM[0x4]"] }
+    ],
+    [ "M_NX[0] (data read from peripheral)",
+      { "name": "m_nx_htrans_i[0]",      "wave": "x.4x...",   "data": ["NONSEQ"] },
+      { "name": "m_nx_haddr_i[0]",       "wave": "x.4x...",   "data": ["0x4000_2000"] },
+      { "name": "m_nx_request_o[0]",     "wave": "0.10..." },
+      { "name": "m_nx_grant_i[0]",       "wave": "0.10..." },
+      { "name": "m_nx_hready_o[0]",      "wave": "1......" },
+      { "name": "m_nx_hrdata_o[0]",      "wave": "0..40..",   "data": ["periph0[0]"] }
+    ],
+    [ "Subordinate sides (parallel sub-fabrics)",
+      { "name": "s_x_hsel_o[rom]",       "wave": "0.10..." },
+      { "name": "s_nx_hsel_o[periph0]",  "wave": "0.10..." }
+    ],
+    {}
+  ],
+  "head": { "text": "Hiperf: M_X reads ROM and M_NX[0] reads peripheral 0 in the same cycle — 2 transfers / cycle via disjoint X / NX sub-fabrics" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

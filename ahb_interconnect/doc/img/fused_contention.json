@@ -1,0 +1,29 @@
+{
+  "signal": [
+    { "name": "hclk_i",            "wave": "p......." },
+    [ "Port A (m_x instr fetch)",
+      { "name": "a_hsel_i",        "wave": "0.10...." },
+      { "name": "a_htrans_i",      "wave": "x.3x....", "data": ["NONSEQ"] },
+      { "name": "a_haddr_i",       "wave": "x.3x....", "data": ["0x10"] },
+      { "name": "a_hreadyout_o",   "wave": "1......." },
+      { "name": "a_hrdata_o",      "wave": "0..30...", "data": ["SRAM[0x4]"] }
+    ],
+    [ "Port B (NX data read, DPH extended 1 cycle)",
+      { "name": "b_hsel_i",        "wave": "0.10...." },
+      { "name": "b_htrans_i",      "wave": "x.4x....", "data": ["NONSEQ"] },
+      { "name": "b_haddr_i",       "wave": "x.4x....", "data": ["0x20"] },
+      { "name": "b_hwrite_i",      "wave": "x.0x...." },
+      { "name": "b_hreadyout_o",   "wave": "1..01..." },
+      { "name": "b_hrdata_o",      "wave": "0...40..", "data": ["SRAM[0x8]"] }
+    ],
+    [ "Arbiter + memory pins",
+      { "name": "arb_grant (RR)",  "wave": "x.34x...", "data": ["A","B"] },
+      { "name": "sram_cen_o",      "wave": "1.0.1..." },
+      { "name": "sram_addr_o",     "wave": "x.34x...", "data": ["0x4","0x8"] },
+      { "name": "sram_dout_i",     "wave": "x..34x..", "data": ["SRAM[0x4]","SRAM[0x8]"] }
+    ],
+    {}
+  ],
+  "head": { "text": "Fused SRAM: Port A vs Port B collision — round-robin grants A first (arb reset state); B releases APH at C2→C3 edge, sees b_hreadyout=0 in C3 (DPH wait state), completes DPH in C4" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

@@ -1,0 +1,67 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_fused_rom
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_fused_rom
+# Module Description : Run wrapper for the fused-ROM testbench variant.
+#----------------------------------------------------------------------------
+
+VERILOG_SIMULATOR=${VERILOG_SIMULATOR:-iverilog}
+SIMULATION_NODUMP=${SIMULATION_NODUMP:-0}
+
+SUBMITFILE=../../../bench/verilog/submit_fused_rom.f
+
+echo " ======================================================="
+echo "| Start simulation: ahb_fused_rom_ctrl unit testbench   |"
+echo " ======================================================="
+echo ""
+
+rm -rf simv simv_fixb *.vcd
+
+if [ "$VERILOG_SIMULATOR" != "iverilog" ]; then
+    echo "ERROR: Only iverilog is supported by this script."
+    exit 1
+fi
+
+NODUMP_FLAG=""
+[ "$SIMULATION_NODUMP" -eq 1 ] && NODUMP_FLAG="-D NODUMP"
+
+# Flatten the submit filelist to absolute paths so the portable
+# (file-relative) entries in $SUBMITFILE resolve correctly regardless
+# of cwd.  Output saved as submit_sim.f for debugging.
+FLATTEN_PY="$(dirname "$(realpath "$0")")/../bin/flatten_filelist.py"
+"$FLATTEN_PY" "$SUBMITFILE" ./submit_sim.f >/dev/null
+SUBMITFILE=./submit_sim.f
+
+# ----------------------------------------------------------------------------
+# Pass 1: Round-robin (default arbitration)
+# ----------------------------------------------------------------------------
+iverilog -o simv      -c $SUBMITFILE $NODUMP_FLAG
+if [ $? -ne 0 ]; then
+    echo "[ERROR] RR compilation failed."
+    exit 1
+fi
+./simv
+
+# ----------------------------------------------------------------------------
+# Pass 2: FIXED_B_PRIO=1 (fixed Port-B priority)
+#
+# Tests that require both ports to share the bus fairly (T4, T7, T8, T9, T10,
+# T11) are guarded out by `ifdef FUSED_FIXED_B_PRIO in the TB; the rest
+# exercise the fixed-B arbiter, including T14 — the directed regression for
+# the saved_addr-preempt bug.
+# ----------------------------------------------------------------------------
+iverilog -o simv_fixb -c $SUBMITFILE $NODUMP_FLAG -D FUSED_FIXED_B_PRIO
+if [ $? -ne 0 ]; then
+    echo "[ERROR] Fixed-B compilation failed."
+    exit 1
+fi
+./simv_fixb

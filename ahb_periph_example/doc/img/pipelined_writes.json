@@ -1,0 +1,30 @@
+{
+  "signal": [
+    { "name": "hclk_i",        "wave": "p......." },
+    [ "AHB",
+      { "name": "hsel_i",        "wave": "0.1..0.." },
+      { "name": "htrans_i[1:0]", "wave": "x.333x..", "data": ["NONSEQ","NONSEQ","NONSEQ"] },
+      { "name": "haddr_i",       "wave": "x.333x..", "data": ["0x00","0x04","0x08"] },
+      { "name": "hwrite_i",      "wave": "x.1..x.." },
+      { "name": "hprot_i[1]",    "wave": "x.1..x..", "data": ["priv"] },
+      { "name": "hsmode_i",      "wave": "x.0..x.." },
+      { "name": "hwdata_i",      "wave": "x..333x.", "data": ["0x11111111","0x22222222","0x33333333"] },
+      { "name": "hreadyout_o",   "wave": "1......." }
+    ],
+    [ "internal",
+      { "name": "dph_valid",     "wave": "0..1..0." },
+      { "name": "dph_addr",      "wave": "x..333x.", "data": ["0x00","0x01","0x02"] },
+      { "name": "reg_wr[REGOUT_00]", "wave": "0..10..." },
+      { "name": "reg_wr[REGOUT_01]", "wave": "0...10.." },
+      { "name": "reg_wr[REGOUT_02]", "wave": "0....10." }
+    ],
+    [ "registers",
+      { "name": "regout_00",     "wave": "2...3...", "data": ["0","0x11111111"] },
+      { "name": "regout_01",     "wave": "2....3..", "data": ["0","0x22222222"] },
+      { "name": "regout_02",     "wave": "2.....3.", "data": ["0","0x33333333"] }
+    ],
+    {}
+  ],
+  "head": { "text": "Pipelined back-to-back writes: REGOUT_00, REGOUT_01, REGOUT_02 updated on 3 consecutive edges" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

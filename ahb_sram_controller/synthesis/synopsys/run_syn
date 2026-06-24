@@ -1,0 +1,85 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_syn
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_syn
+# Module Description : Synthesis launcher. Parses CLI flags (-lib, -noquit),
+#                      validates the library flavor, and invokes dc_shell on
+#                      synthesis.tcl.
+#----------------------------------------------------------------------------
+
+# Parse command line arguments
+NO_QUIT=0
+LIB_FLAVOR="lib_default"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -noquit|--noquit|--interactive|-i)
+            NO_QUIT=1
+            shift
+            ;;
+        -lib|--lib)
+            LIB_FLAVOR="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [-noquit|--interactive|-i] [-lib <flavor>]"
+            echo "  -noquit, --noquit, --interactive, -i : Keep dc_shell open after synthesis"
+            echo "  -lib <flavor>                        : Select library flavor (default: lib_default)"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate library flavor
+if [[ ! -f "./libraries/setup_${LIB_FLAVOR}.tcl" ]]; then
+    echo "Error: Unknown library flavor '${LIB_FLAVOR}'"
+    echo "Valid flavors:"
+    for f in ./libraries/setup_*.tcl; do
+        flavor=$(basename "$f" .tcl | sed 's/^setup_//')
+        echo "  ${flavor}"
+    done
+    exit 1
+fi
+
+mkdir -p ./results
+rm -rf ./results/*
+
+START_TIME=$SECONDS
+
+# Export variables so synthesis.tcl can read them
+export NO_QUIT
+export LIB_FLAVOR
+
+if [[ $NO_QUIT -eq 1 ]]; then
+    echo "Interactive mode: dc_shell will remain open after synthesis completes"
+fi
+
+# Generate the RTL filelist TCL fragment consumed by read.tcl.
+# Single source of truth: rtl/verilog/filelist.f.
+FLATTEN_PY="$(dirname "$(realpath "$0")")/../../sim/rtl_sim/bin/flatten_filelist.py"
+"$FLATTEN_PY" --format tcl ../../rtl/verilog/filelist.f ./submit_syn.tcl
+
+dc_shell-t -f synthesis.tcl | tee ./results/synthesis.log
+
+rm -rf ./clog*
+
+ELAPSED=$(( SECONDS - START_TIME ))
+HOURS=$(( ELAPSED / 3600 ))
+MINUTES=$(( (ELAPSED % 3600) / 60 ))
+SECS=$(( ELAPSED % 60 ))
+echo ""
+echo "Synthesis completed in ${HOURS}h ${MINUTES}m ${SECS}s"
+
+# Print the top-10 worst critical paths from results/report.full_paths.max
+echo ""
+echo "=== Worst critical paths (top 10) ==="
+python3 ./extract_worst_path.py -short 2>/dev/null || true

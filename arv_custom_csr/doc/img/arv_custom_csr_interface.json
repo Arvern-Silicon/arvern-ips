@@ -1,0 +1,20 @@
+{signal: [
+  {name: 'hclk_i',                 wave: 'p.....'},
+  {},
+  {name: 'Instruction',            wave: 'x937x.', data: ['csrrw x12, 0xBC0, x10',     'csrrs x12, 0xDC3, x0',     'csrrw x12, 0x897, x11']},
+  {name: 'x10',                    wave: '9.....', data: ['0xDEADBEEF']},
+  {name: 'x11',                    wave: '7.....', data: ['0xBADC0FFE']},
+  {name: 'x12',                    wave: 'x.937.',    data: ['0x12345678', '0x9ABCDEF0', '0x245780AC']},
+  {},
+  {name: 'ccsr_bank_i',            wave: 'x937x.', data: ['Bank 9',     'Bank 7',     'Bank 2'    ]},
+  {name: 'ccsr_reg_sel_i',         wave: 'x937x.', data: ['Reg 0',      'Reg 3',      'Reg 23'    ]},
+  {name: 'ccsr_wdata_i',           wave: 'x9x7x.', data: ['0xDEADBEEF',               '0xBADC0FFE']},
+  {name: 'ccsr_wen_i',             wave: '01010.'},
+  {name: 'ccsr_rdata_o',           wave: 'x937x.', data: ['0x12345678', '0x9ABCDEF0', '0x245780AC']},
+  {},
+  {name: 'ccsr_mac_rw_o (@0xBC0)', wave: '9.9...', data: ['0x12345678', '0xDEADBEEF'              ]},
+  {name: 'ccsr_sup_ro_i (@0xDC3)', wave: '3.....', data: ['0x9ABCDEF0'                            ]},
+  {name: 'ccsr_usr_rw_o (@0x897)', wave: '7...7.', data: ['0x245780AC', '0xBADC0FFE'              ]},
+],
+  config: { hscale: 4 }
+}

@@ -1,0 +1,24 @@
+{
+  "signal": [
+    { "name": "hclk_i",       "wave": "p......." },
+    [ "AHB",
+      { "name": "hsel_i",       "wave": "0.1...0." },
+      { "name": "htrans_i[1:0]","wave": "x.3434x.", "data": ["NONSEQ","NONSEQ","NONSEQ","NONSEQ"] },
+      { "name": "haddr_i",      "wave": "x.3434x.", "data": ["0x10","0x14","0x18","0x1C"] },
+      { "name": "hwrite_i",     "wave": "x.0...x." },
+      { "name": "hreadyout_o",  "wave": "1......." },
+      { "name": "hrdata_o",     "wave": "0..34340", "data": ["mem[0x4]","mem[0x5]","mem[0x6]","mem[0x7]"] }
+    ],
+    [ "ROM",
+      { "name": "rom_cen_o",    "wave": "1.0...1." },
+      { "name": "rom_addr_o",   "wave": "x.3434x.", "data": ["0x4","0x5","0x6","0x7"] },
+      { "name": "rom_dout_i",   "wave": "x..34340", "data": ["mem[0x4]","mem[0x5]","mem[0x6]","mem[0x7]"] }
+    ],
+    [ "internal",
+      { "name": "aph_read",     "wave": "0.1...0." },
+      { "name": "rd_active",    "wave": "0..1...0" }
+    ]
+  ],
+  "head": { "text": "Pipelined back-to-back reads: one transfer per cycle (alternating yellow/orange per beat)" },
+  "config": { "hscale": 2 }
+}

@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Enable/Disable waveform dumping
+SIMULATION_NODUMP=0
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+# Default test name
+testname="priority_rdwr"
+
+
+# Parse argument if specified
+if [ "$#" -eq 1 ]; then
+    if [ ! -e "../src/$1.v" ]; then
+       echo "[ERROR] File does not exist: ../src/$1.v"
+       echo ""
+       echo "The following tests have been detected:"
+       for file in ../src/*.v; do
+          echo "                                          + $(basename "$file" .v)"
+       done
+       exit 1
+    fi
+    testname=$1
+fi
+
+# Run simulation
+../bin/runsim $testname

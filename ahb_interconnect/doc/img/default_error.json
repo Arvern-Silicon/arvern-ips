@@ -1,0 +1,27 @@
+{
+  "signal": [
+    { "name": "hclk_i",                  "wave": "p......" },
+    [ "M0 (unmapped @ 0xDEAD_0000)",
+      { "name": "m_htrans_i[m0]",        "wave": "x.3x...",   "data": ["NONSEQ"] },
+      { "name": "m_haddr_i[m0]",         "wave": "x.3x...",   "data": ["0xDEAD_0000"] },
+      { "name": "m_hready_o[m0]",        "wave": "1..01..",   "node": "...c..." },
+      { "name": "m_hresp_o[m0]",         "wave": "0..1.0.",   "node": "...d.f." },
+      { "name": "m_hrdata_o[m0]",        "wave": "0......" }
+    ],
+    [ "Fabric internals",
+      { "name": "s_decoder_addr_o",      "wave": "x.3x...",   "data": ["0xDEAD_0000"] },
+      { "name": "s_decoder_1hot_i",      "wave": "x.3x...",   "data": ["00…00"] },
+      { "name": "dflt_decoder (internal)","wave": "0.10..." },
+      { "name": "dflt_hsel (internal)",  "wave": "0.10..." }
+    ],
+    [ "Default subordinate",
+      { "name": "data_phase[0]",         "wave": "0..10.." },
+      { "name": "data_phase[1]",         "wave": "0...10." },
+      { "name": "dflt_hreadyout",        "wave": "1..01.." },
+      { "name": "dflt_hresp",            "wave": "0..1.0." }
+    ],
+    {}
+  ],
+  "head": { "text": "Default subordinate: 2-cycle ERROR response on unmapped address" },
+  "config": { "hscale": 2, "fontsize": 8 }
+}

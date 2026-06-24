@@ -1,0 +1,36 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      arv_common.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for the arv_common building-block library.
+# Other aRVern IPs depend on this via:
+#   depend: [arvern:ips:arv_common:1.0]
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:arv_common:1.0
+description: Common building blocks (synchronizers, etc.) shared across aRVern system IPs.
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/arv_ipdff.v
+      - rtl/verilog/arv_synchronizer.v
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_synchronizer

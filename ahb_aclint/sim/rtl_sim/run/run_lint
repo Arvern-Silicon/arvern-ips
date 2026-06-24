@@ -1,0 +1,17 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# Lint the ahb_aclint RTL.
+#
+# Default:  lint the RTL with the parameter defaults baked into the modules.
+# -sweep :  run the parameterization sweep defined in bin/rtl_configs.py
+#           (every config gets its own Verilator -lint-only invocation with
+#           -G<PARAM>=<VAL> overrides, and a summary table is printed).
+#----------------------------------------------------------------------------
+
+if [ "$1" = "-sweep" ]; then
+    exec ../bin/run_lint_sweep.py
+fi
+
+../bin/flatten_filelist.py ../../../rtl/verilog/filelist.f submit_lint.f
+
+verilator --lint-only -Wall -Wpedantic waivers.vlt -f submit_lint.f

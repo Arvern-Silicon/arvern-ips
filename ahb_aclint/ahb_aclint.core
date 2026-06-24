@@ -1,0 +1,43 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      ahb_aclint.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:ahb_aclint:1.0
+description: RISC-V ACLINT 1.0-rc4 AHB-Lite slave (MSWI / MTIMER + LF wake / SSWI; per-hart M+S IRQs).
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/aclint_gray2bin.v
+      - rtl/verilog/aclint_mtimer_count_lf.v
+      - rtl/verilog/aclint_mtimer_gray_sync.v
+      - rtl/verilog/aclint_mtimer_write_cdc.v
+      - rtl/verilog/aclint_mtimer.v
+      - rtl/verilog/aclint_mswi.v
+      - rtl/verilog/aclint_sswi.v
+      - rtl/verilog/ahb_aclint.v
+    depend:
+      - arvern:ips:arv_common:1.0
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_aclint

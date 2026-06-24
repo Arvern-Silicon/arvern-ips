@@ -1,0 +1,139 @@
+#!/bin/bash
+
+# Disable waveform dumping
+SIMULATION_NODUMP=1
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+# Argument specifies number of regression loops
+if [ $# -ne 1 ]; then
+    LAST_REGRESSION=0
+else
+    LAST_REGRESSION=$(($1-1))
+fi
+
+# Cleanup from previous regression
+LOG_DIR=./log
+rm -rf $LOG_DIR/*
+
+# Perform the regression runs
+for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
+  do
+
+    # Cleanup & log directory setup
+    LOG_DIR=./log/$ii
+    mkdir -p $LOG_DIR
+
+    # Two-Operand Arithmetic test patterns
+    ../bin/runsim simple_rdwr                                    | tee $LOG_DIR/simple_rdwr.log
+    ../bin/runsim pipelined_rdwr                                 | tee $LOG_DIR/pipelined_rdwr.log
+    ../bin/runsim pipelined_advanced                             | tee $LOG_DIR/pipelined_advanced.log
+    ../bin/runsim simple_arbiter                                 | tee $LOG_DIR/simple_arbiter.log
+    ../bin/runsim arbiter_stress                                 | tee $LOG_DIR/arbiter_stress.log
+    ../bin/runsim default_subordinate_stress                     | tee $LOG_DIR/default_subordinate_stress.log
+
+    ../bin/runsim simple_rdwr                     -random_ws     | tee $LOG_DIR/simple_rdwr-ws.log
+    ../bin/runsim pipelined_rdwr                  -random_ws     | tee $LOG_DIR/pipelined_rdwr-ws.log
+    ../bin/runsim pipelined_advanced              -random_ws     | tee $LOG_DIR/pipelined_advanced-ws.log
+    ../bin/runsim simple_arbiter                  -random_ws     | tee $LOG_DIR/simple_arbiter-ws.log
+    ../bin/runsim arbiter_stress                  -random_ws     | tee $LOG_DIR/arbiter_stress-ws.log
+
+    ../bin/runsim simple_rdwr            -hiperf                 | tee $LOG_DIR/simple_rdwr-hiperf.log
+    ../bin/runsim pipelined_rdwr         -hiperf                 | tee $LOG_DIR/pipelined_rdwr-hiperf.log
+    ../bin/runsim pipelined_advanced     -hiperf                 | tee $LOG_DIR/pipelined_advanced-hiperf.log
+    ../bin/runsim hiperf_arbiter         -hiperf                 | tee $LOG_DIR/hiperf_arbiter-hiperf.log
+    ../bin/runsim arbiter_stress         -hiperf                 | tee $LOG_DIR/arbiter_stress-hiperf.log
+    ../bin/runsim default_subordinate_stress -hiperf             | tee $LOG_DIR/default_subordinate_stress-hiperf.log
+
+    ../bin/runsim simple_rdwr            -hiperf  -random_ws     | tee $LOG_DIR/simple_rdwr-hiperf-ws.log
+    ../bin/runsim pipelined_rdwr         -hiperf  -random_ws     | tee $LOG_DIR/pipelined_rdwr-hiperf-ws.log
+    ../bin/runsim pipelined_advanced     -hiperf  -random_ws     | tee $LOG_DIR/pipelined_advanced-hiperf-ws.log
+    ../bin/runsim hiperf_arbiter         -hiperf  -random_ws     | tee $LOG_DIR/hiperf_arbiter-hiperf-ws.log
+    ../bin/runsim arbiter_stress         -hiperf  -random_ws     | tee $LOG_DIR/arbiter_stress-hiperf-ws.log
+
+    # FUSED fabric: M0 -> Port A read-only (instruction fetch); arbitration is
+    # internal so the GENERIC/HIPERF external-arbiter tests are N/A.  The
+    # fused_arbiter test exercises Port-A vs Port-B contention + the M1<->M2
+    # mux on Port B.
+    #
+    # Default arbitration is round-robin (toggle priority).  The -fixed_b_prio
+    # variants below cover the alternate scheme (fixed Port-B priority — data
+    # bus always wins, A-port can starve under heavy B-port traffic).
+    ../bin/runsim simple_rdwr            -fused                                  | tee $LOG_DIR/simple_rdwr-fused.log
+    ../bin/runsim pipelined_rdwr         -fused                                  | tee $LOG_DIR/pipelined_rdwr-fused.log
+    ../bin/runsim pipelined_advanced     -fused                                  | tee $LOG_DIR/pipelined_advanced-fused.log
+    ../bin/runsim fused_arbiter          -fused                                  | tee $LOG_DIR/fused_arbiter-fused.log
+    ../bin/runsim arbiter_stress         -fused                                  | tee $LOG_DIR/arbiter_stress-fused.log
+    ../bin/runsim default_subordinate_stress -fused                              | tee $LOG_DIR/default_subordinate_stress-fused.log
+
+    ../bin/runsim simple_rdwr            -fused                  -random_ws      | tee $LOG_DIR/simple_rdwr-fused-ws.log
+    ../bin/runsim pipelined_rdwr         -fused                  -random_ws      | tee $LOG_DIR/pipelined_rdwr-fused-ws.log
+    ../bin/runsim pipelined_advanced     -fused                  -random_ws      | tee $LOG_DIR/pipelined_advanced-fused-ws.log
+    ../bin/runsim fused_arbiter          -fused                  -random_ws      | tee $LOG_DIR/fused_arbiter-fused-ws.log
+    ../bin/runsim arbiter_stress         -fused                  -random_ws      | tee $LOG_DIR/arbiter_stress-fused-ws.log
+
+    ../bin/runsim simple_rdwr            -fused   -fixed_b_prio                  | tee $LOG_DIR/simple_rdwr-fused-fixp.log
+    ../bin/runsim pipelined_rdwr         -fused   -fixed_b_prio                  | tee $LOG_DIR/pipelined_rdwr-fused-fixp.log
+    ../bin/runsim pipelined_advanced     -fused   -fixed_b_prio                  | tee $LOG_DIR/pipelined_advanced-fused-fixp.log
+    ../bin/runsim fused_arbiter          -fused   -fixed_b_prio                  | tee $LOG_DIR/fused_arbiter-fused-fixp.log
+    ../bin/runsim arbiter_stress         -fused   -fixed_b_prio                  | tee $LOG_DIR/arbiter_stress-fused-fixp.log
+
+    ../bin/runsim simple_rdwr            -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/simple_rdwr-fused-fixp-ws.log
+    ../bin/runsim pipelined_rdwr         -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/pipelined_rdwr-fused-fixp-ws.log
+    ../bin/runsim pipelined_advanced     -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/pipelined_advanced-fused-fixp-ws.log
+    ../bin/runsim fused_arbiter          -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/fused_arbiter-fused-fixp-ws.log
+    ../bin/runsim arbiter_stress         -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/arbiter_stress-fused-fixp-ws.log
+
+
+    #--------------------------------------------------------------------------
+    # Synchronous-reset pass
+    #
+    # Re-build the interconnect variants with ASYNC_RST_EN=0 (synchronous reset)
+    # and re-run a representative subset across all THREE interconnect tops
+    # (generic / -hiperf / -fused).  This mirrors the arvern core's
+    # ASYNC_RST_EN config coverage at the block level.  The subset covers
+    # rd/wr datapath, arbitration, and the default-subordinate path per variant;
+    # default reset architecture is async, so the runs above remain the primary
+    # (and byte-identical) coverage.
+    #--------------------------------------------------------------------------
+    export SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
+
+    # GENERIC (default top)
+    ../bin/runsim simple_rdwr                                    | tee $LOG_DIR/simple_rdwr-sync.log
+    ../bin/runsim simple_arbiter                                 | tee $LOG_DIR/simple_arbiter-sync.log
+    ../bin/runsim default_subordinate_stress                     | tee $LOG_DIR/default_subordinate_stress-sync.log
+
+    # HIPERF
+    ../bin/runsim simple_rdwr            -hiperf                 | tee $LOG_DIR/simple_rdwr-hiperf-sync.log
+    ../bin/runsim hiperf_arbiter         -hiperf                 | tee $LOG_DIR/hiperf_arbiter-hiperf-sync.log
+    ../bin/runsim default_subordinate_stress -hiperf             | tee $LOG_DIR/default_subordinate_stress-hiperf-sync.log
+
+    # FUSED
+    ../bin/runsim simple_rdwr            -fused                  | tee $LOG_DIR/simple_rdwr-fused-sync.log
+    ../bin/runsim fused_arbiter          -fused                  | tee $LOG_DIR/fused_arbiter-fused-sync.log
+    ../bin/runsim default_subordinate_stress -fused              | tee $LOG_DIR/default_subordinate_stress-fused-sync.log
+
+    # Restore async (default) reset architecture for any subsequent iteration.
+    unset SIM_EXTRA_DEFINES
+
+
+    # Report regression results
+    ../bin/parse_results $LOG_DIR                       | tee $LOG_DIR/../summary.$ii.log
+
+done
+
+
+if [ $LAST_REGRESSION != 0 ]; then
+    ../bin/parse_summaries                              | tee $LOG_DIR/../regressions_summary.log
+fi
+

@@ -1,0 +1,40 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      ahb_plic.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:ahb_plic:1.0
+description: RISC-V PLIC 1.0 AHB-Lite slave (parameterizable sources / contexts, M+S delivery).
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/plic_priority.v
+      - rtl/verilog/plic_pending.v
+      - rtl/verilog/plic_enable.v
+      - rtl/verilog/plic_target.v
+      - rtl/verilog/ahb_plic.v
+    depend:
+      - arvern:ips:arv_common:1.0
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_plic

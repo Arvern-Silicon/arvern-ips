@@ -1,0 +1,43 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      ahb_rom_controller.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration.  Lists only the RTL files
+# of this IP so an SoC integrator can pull them into their own flow:
+#
+#   fusesoc library add aRVern_ips <path-to-arvern-ips>
+#   fusesoc run --target=lint --setup arvern:ips:ahb_rom_controller
+#
+# The IP's own simulation / regression flow uses the native runsim
+# scripts under sim/rtl_sim/ — this .core is intentionally not involved
+# in that path.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:ahb_rom_controller:1.0
+description: AHB-Lite ROM controller for the arvern SoC family.
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    depend:
+      - arvern:ips:arv_common:1.0
+    files:
+      - rtl/verilog/ahb_rom_controller.v
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_rom_controller

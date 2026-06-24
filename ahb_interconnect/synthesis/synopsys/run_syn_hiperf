@@ -1,0 +1,18 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_syn_hiperf
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_syn_hiperf
+# Module Description : Wrapper around run_syn that pins the synthesis top to
+#                      ahb_interconnect_hiperf. Extra CLI args are forwarded.
+#----------------------------------------------------------------------------
+
+exec ./run_syn -design ahb_interconnect_hiperf "$@"

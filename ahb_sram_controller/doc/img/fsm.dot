@@ -1,0 +1,52 @@
+// AHB SRAM controller FSM
+//
+// Edit this source file (not the generated SVG), then re-render with:
+//     python3 ./render.py            # rebuilds every .dot and .json in this dir
+//     python3 ./render.py fsm.dot    # rebuilds just this file
+
+digraph ahb_sram_controller_fsm {
+    rankdir = LR;
+    bgcolor = "white";
+
+    // Node defaults: ellipse with state name
+    node [shape=ellipse,
+          style=filled,
+          fillcolor="#f2f2f2",
+          fontname="Helvetica",
+          fontsize=12,
+          color="#444444"];
+
+    // Edge defaults
+    edge [fontname="Helvetica",
+          fontsize=10,
+          color="#444444",
+          fontcolor="#222222"];
+
+    // Implicit start arrow
+    start [shape=point, width=0.15, color="#444444", fillcolor="#444444"];
+
+    // The four FSM states
+    IDLE  [label="IDLE\n3'b000"];
+    READ  [label="READ\n3'b010", fillcolor="#fff7c8"];   // yellow
+    WRITE [label="WRITE\n3'b100", fillcolor="#ffd9a8"];  // orange
+    RPW   [label="READ_PENDING_WRITE\n3'b011", fillcolor="#c8dfff"]; // blue
+
+    // Start arrow
+    start -> IDLE;
+
+    // Transitions
+    IDLE  -> READ   [label=" aph_read"];
+    IDLE  -> WRITE  [label=" aph_write"];
+
+    READ  -> READ   [label=" aph_read"];
+    READ  -> WRITE  [label=" aph_write"];
+    READ  -> IDLE   [label=" idle"];
+
+    WRITE -> RPW    [label=" aph_read"];
+    WRITE -> WRITE  [label=" aph_write"];
+    WRITE -> IDLE   [label=" idle"];
+
+    RPW   -> RPW    [label=" aph_read"];
+    RPW   -> WRITE  [label=" aph_write"];
+    RPW   -> IDLE   [label=" idle"];
+}

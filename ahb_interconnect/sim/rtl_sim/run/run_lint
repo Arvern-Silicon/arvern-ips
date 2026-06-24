@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Flatten the RTL filelist once; all 3 variants share the same source set.
+../bin/flatten_filelist.py ../../../rtl/verilog/filelist.f submit_lint.f
+
+echo ""
+echo " ======================================================"
+echo "|         LINT:  Generic AHB Interconnect              |"
+echo " ======================================================"
+echo ""
+verilator --lint-only -Wall -Wpedantic --top ahb_interconnect_generic waivers_generic.vlt -f submit_lint.f
+
+echo ""
+echo ""
+echo " ======================================================"
+echo "|         LINT:  High-Perf AHB Interconnect            |"
+echo " ======================================================"
+echo ""
+verilator --lint-only -Wall -Wpedantic --top ahb_interconnect_hiperf waivers_hiperf.vlt -f submit_lint.f
+
+echo ""
+echo ""
+echo " ======================================================"
+echo "|         LINT:  Fused AHB Interconnect                |"
+echo " ======================================================"
+echo ""
+verilator --lint-only -Wall -Wpedantic --top ahb_interconnect_fused waivers_fused.vlt -f submit_lint.f
+
+echo ""

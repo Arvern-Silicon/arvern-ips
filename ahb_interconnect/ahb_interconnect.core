@@ -1,0 +1,62 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      ahb_interconnect.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+#
+# Three fabric variants share the same RTL fileset.  The integrator
+# picks which top to elaborate by selecting one of the three lint
+# targets (or by passing --target=default --toplevel=<...> when using
+# their own tool).
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:ahb_interconnect:1.0
+description: "AHB-Lite multi-manager / multi-subordinate fabric (3 variants: generic / hiperf / fused)."
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/ahb_default_subordinate.v
+      - rtl/verilog/ahb_subordinate_mux.v
+      - rtl/verilog/ahb_manager_if.v
+      - rtl/verilog/ahb_manager_mux.v
+      - rtl/verilog/ahb_arbiter_2m.v
+      - rtl/verilog/ahb_fused_rom_ctrl.v
+      - rtl/verilog/ahb_fused_sram_ctrl.v
+      - rtl/verilog/ahb_interconnect_generic.v
+      - rtl/verilog/ahb_interconnect_hiperf.v
+      - rtl/verilog/ahb_interconnect_fused.v
+    depend:
+      - arvern:ips:arv_common:1.0
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_interconnect_generic
+
+  lint_hiperf:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_interconnect_hiperf
+
+  lint_fused:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: ahb_interconnect_fused

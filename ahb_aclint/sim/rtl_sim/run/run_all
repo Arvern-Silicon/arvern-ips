@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# -sweep : run the parameterization sweep (every test under every
+#          compatible config defined in bin/sim_configs.py). Each
+#          (config, test) gets its own iverilog compile with -D
+#          PLIC_* / ACLINT_* defines.
+if [ "$1" = "-sweep" ]; then
+    exec ../bin/run_sweep.py
+fi
+
+# Disable waveform dumping
+SIMULATION_NODUMP=1
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+
+# Argument specifies number of regression loops
+if [ $# -ne 1 ]; then
+    LAST_REGRESSION=0
+else
+    LAST_REGRESSION=$(($1-1))
+fi
+
+# Cleanup from previous regression
+LOG_DIR=./log
+rm -rf $LOG_DIR/*
+
+# Perform the regression runs
+for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
+  do
+
+    # Cleanup & log directory setup
+    LOG_DIR=./log/$ii
+    mkdir -p $LOG_DIR
+
+    # ACLINT block-level test list
+    ../bin/runsim mswi_basic                  | tee $LOG_DIR/mswi_basic.log
+    ../bin/runsim mtimer_cmp_writeback        | tee $LOG_DIR/mtimer_cmp_writeback.log
+    ../bin/runsim mtimer_atomic_read          | tee $LOG_DIR/mtimer_atomic_read.log
+    ../bin/runsim mtimer_wake                 | tee $LOG_DIR/mtimer_wake.log
+    ../bin/runsim sswi_basic                  | tee $LOG_DIR/sswi_basic.log
+    ../bin/runsim unmapped_access             | tee $LOG_DIR/unmapped_access.log
+    ../bin/runsim priv_check                  | tee $LOG_DIR/priv_check.log
+
+
+    # Report regression results
+    ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log
+
+done
+
+
+if [ $LAST_REGRESSION != 0 ]; then
+    ../bin/parse_summaries                    | tee $LOG_DIR/../regressions_summary.log
+fi

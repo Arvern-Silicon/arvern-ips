@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Disable waveform dumping
+SIMULATION_NODUMP=1
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+
+# Argument specifies number of regression loops
+if [ $# -ne 1 ]; then
+    LAST_REGRESSION=0
+else
+    LAST_REGRESSION=$(($1-1))
+fi
+
+# Cleanup from previous regression
+LOG_DIR=./log
+rm -rf $LOG_DIR/*
+
+# Perform the regression runs
+for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
+  do
+
+    # Cleanup & log directory setup
+    LOG_DIR=./log/$ii
+    mkdir -p $LOG_DIR
+     
+    # AHB ROM controller test patterns (asynchronous-reset config — default)
+    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr.log
+    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr.log
+    ../bin/runsim reset_check                 | tee $LOG_DIR/reset_check.log
+    ../bin/runsim address_sweep               | tee $LOG_DIR/address_sweep.log
+
+    # Re-run the same test list in the synchronous-reset config (ASYNC_RST_EN=0),
+    # mirroring the arvern core's reset-architecture coverage.
+    SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
+    export SIM_EXTRA_DEFINES
+    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr-sync.log
+    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr-sync.log
+    ../bin/runsim reset_check                 | tee $LOG_DIR/reset_check-sync.log
+    ../bin/runsim address_sweep               | tee $LOG_DIR/address_sweep-sync.log
+    unset SIM_EXTRA_DEFINES
+
+
+    # Report regression results
+    ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log
+
+done
+
+
+if [ $LAST_REGRESSION != 0 ]; then
+    ../bin/parse_summaries                    | tee $LOG_DIR/../regressions_summary.log
+fi

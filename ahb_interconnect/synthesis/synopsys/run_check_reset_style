@@ -1,0 +1,81 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_check_reset_style
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_check_reset_style
+# Module Description : Run Synopsys PrimeTime to check the reset style of the
+#                      synthesized interconnect netlist (./results/<top>.gate.v).
+#
+#                      ahb_interconnect ships three fabric variants; select the
+#                      one to check with -design <variant> (same flag/default as
+#                      run_syn), e.g.
+#                          ./run_check_reset_style -design ahb_interconnect_generic
+#                      The selected DESIGN_NAME is exported and consumed by
+#                      check_reset_style_pt.tcl (netlist + RTL-default detection).
+#----------------------------------------------------------------------------
+
+# Parse command line arguments (mirrors run_syn: -design / -lib).
+LIB_FLAVOR="lib_default"
+DESIGN_NAME="ahb_interconnect_fused"
+VALID_DESIGNS="ahb_interconnect_generic ahb_interconnect_hiperf ahb_interconnect_fused"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -lib|--lib)
+            LIB_FLAVOR="$2"
+            shift 2
+            ;;
+        -design|--design)
+            DESIGN_NAME="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [-lib <flavor>] [-design <variant>]"
+            echo "  -lib <flavor>      : Select library flavor (default: lib_default)"
+            echo "  -design <variant>  : Select fabric variant (default: ahb_interconnect_fused)"
+            echo "                       Valid: ${VALID_DESIGNS}"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate library flavor
+if [[ ! -f "./libraries/setup_${LIB_FLAVOR}.tcl" ]]; then
+    echo "Error: Unknown library flavor '${LIB_FLAVOR}'"
+    echo "Valid flavors:"
+    for f in ./libraries/setup_*.tcl; do
+        flavor=$(basename "$f" .tcl | sed 's/^setup_//')
+        echo "  ${flavor}"
+    done
+    exit 1
+fi
+
+# Validate design name
+match=0
+for d in $VALID_DESIGNS; do
+    if [[ "$d" == "$DESIGN_NAME" ]]; then
+        match=1
+        break
+    fi
+done
+if [[ $match -eq 0 ]]; then
+    echo "Error: Unknown design variant '${DESIGN_NAME}'"
+    echo "Valid variants: ${VALID_DESIGNS}"
+    exit 1
+fi
+
+# Export so check_reset_style_pt.tcl (and the library setup) can read them.
+export LIB_FLAVOR
+export DESIGN_NAME
+
+echo "Checking reset style of ${DESIGN_NAME} (library flavor '${LIB_FLAVOR}')"
+
+pt_shell -f check_reset_style_pt.tcl
