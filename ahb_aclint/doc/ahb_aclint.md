@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/aRVern_light.png" alt="aRVern" width="180">
+  <img src="../../arv_custom_csr/doc/img/aRVern_light.png" alt="aRVern" width="180">
 </p>
 
 # ACLINT Interrupt Controller (AHB-Lite)
@@ -298,7 +298,7 @@ flop inside the ACLINT still needs to update.
 
 **Integration pattern (SoC side).** Wire `hclk_en_o` into a latch-based
 ICG and use the gated output as `hclk_i`. Wire the free-running
-AHB-frequency clock straight into `hclk_aon_i`. 
+AHB-frequency clock straight into `hclk_aon_i`.
 
 The testbench at `bench/verilog/tb_ahb_aclint.v` models a
 proper ICG:

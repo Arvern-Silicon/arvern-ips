@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/aRVern_light.png" alt="aRVern" width="180">
+  <img src="../../arv_custom_csr/doc/img/aRVern_light.png" alt="aRVern" width="180">
 </p>
 
 # Platform-Level Interrupt Controller (AHB-Lite)
