@@ -138,16 +138,16 @@ reg  [10:0] src;    // 0..NUM_SOURCES (max 1023)
 always @(*) begin
     rd_word = 32'h0;
     src     = 11'h0;
+    // AND-OR over the one-hot context select and the word decode; the
+    // source-range test is on loop constants.
     for (cc = 6'h0; cc < NUM_CONTEXTS_S6; cc = cc + 6'h1) begin
-        if (ctx_sel[cc[CTX_IDX_W-1:0]]) begin
-            for (ww = 6'h0; ww < 6'd32; ww = ww + 6'h1) begin
-                if (word_idx == ww[4:0]) begin
-                    for (bb = 6'h0; bb < 6'd32; bb = bb + 6'h1) begin
-                        src = {5'h0, ww} * 11'd32 + {5'h0, bb};
-                        if ((src >= 11'h1) && (src <= NUM_SOURCES_S11))
-                            rd_word[bb[4:0]] = enable_reg[cc[CTX_IDX_W-1:0]][src[SRC_IDX_W-1:0]];
-                    end
-                end
+        for (ww = 6'h0; ww < 6'd32; ww = ww + 6'h1) begin
+            for (bb = 6'h0; bb < 6'd32; bb = bb + 6'h1) begin
+                src = {5'h0, ww} * 11'd32 + {5'h0, bb};
+                if ((src >= 11'h1) && (src <= NUM_SOURCES_S11))
+                    rd_word[bb[4:0]] = rd_word[bb[4:0]] |
+                                       (ctx_sel[cc[CTX_IDX_W-1:0]] & (word_idx == ww[4:0]) &
+                                        enable_reg[cc[CTX_IDX_W-1:0]][src[SRC_IDX_W-1:0]]);
             end
         end
     end
@@ -181,7 +181,8 @@ endgenerate
 //=============================================================================
 // 7)  LINT CLEANUP
 //=============================================================================
-// reg_addr_i[1:0] (byte lanes) ignored -- AHB top guarantees word alignment.
+// reg_addr_i[1:0] (byte lanes) ignored: a misaligned word address selects its
+// containing word (the top admits word-size transfers only).
 // reg_wr_data_i[0] is the source-0 enable for word 0 (hard-tied 0); it is
 // the enable for source (32*word) when word>0 (used when NUM_SOURCES>=32).
 // Sink it unconditionally so lint is clean for all NUM_SOURCES.
@@ -191,6 +192,8 @@ assign     reg_addr_lsb_unused = reg_addr_i[1:0];
 
 wire       reg_wr_data0_unused;
 assign     reg_wr_data0_unused = reg_wr_data_i[0];
+
+wire       src_unused          = |src;
 
 endmodule // plic_enable
 

@@ -21,7 +21,7 @@ filesets:
   rtl:
     file_type: verilogSource
     depend:
-      - arvern:ips:arv_common:1.0
+      - arvern:ips:arv_primitives:1.0
     files:
       - rtl/verilog/arv_ccsr_rdwr.v
       - rtl/verilog/arv_ccsr_rdonly.v

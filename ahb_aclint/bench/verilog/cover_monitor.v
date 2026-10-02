@@ -19,8 +19,7 @@
 //                      and FAILS the regression if any mandatory bin
 //                      (sim_configs.MANDATORY_COVER_BINS) was never hit in any
 //                      config. That suite-level gate is what makes an
-//                      unexercised FSM state / interface visible -- the exact
-//                      blind spot that hid the time_gnt_r clock-gate bug.
+//                      unexercised FSM state / interface visible.
 //
 //                      Bins are set with '=== 1'b1' style compares so an X
 //                      during reset can never raise a bin (no reset gating
@@ -28,16 +27,16 @@
 //----------------------------------------------------------------------------
 
 // ---- FSM ownership states (aclint_mtimer arbitration FSM) ----
-reg cov_fsm_idle;
-reg cov_fsm_ahb_pend;
-reg cov_fsm_time_pend;
+reg cov_lf_tick;
+reg cov_mirror_valid;
+reg cov_mirror_stale;
 // ---- Zicntr side-band handshake ----
 reg cov_time_req;
 reg cov_time_gnt;
 // ---- MTIMECMP write CDC ----
-reg cov_wlo_busy;
-reg cov_whi_busy;
-reg cov_wr_stall;
+reg cov_cmp_wr;
+reg cov_mtime_wr;
+reg cov_load_ack;
 // ---- Clock gate exercised in BOTH directions ----
 reg cov_hclk_en_hi;
 reg cov_hclk_en_lo;
@@ -56,35 +55,41 @@ reg cov_subword;
 // ---- Top hart exercised (per-hart muxing at the high index) ----
 reg cov_mtip_top_hart;
 // ---- MTIP write-busy suppression mask actually engaged ----
-reg cov_mtip_masked;
+reg cov_mtime_rd_stall;
 
 initial begin
-   cov_fsm_idle      = 1'b0; cov_fsm_ahb_pend = 1'b0; cov_fsm_time_pend = 1'b0;
+   cov_lf_tick       = 1'b0; cov_mirror_valid = 1'b0; cov_mirror_stale  = 1'b0;
    cov_time_req      = 1'b0; cov_time_gnt     = 1'b0;
-   cov_wlo_busy      = 1'b0; cov_whi_busy     = 1'b0; cov_wr_stall      = 1'b0;
+   cov_cmp_wr        = 1'b0; cov_mtime_wr     = 1'b0; cov_load_ack      = 1'b0;
    cov_hclk_en_hi    = 1'b0; cov_hclk_en_lo   = 1'b0;
    cov_irq_msw       = 1'b0; cov_irq_mtip     = 1'b0; cov_irq_ssw       = 1'b0;
    cov_wake_lf       = 1'b0;
    cov_hresp_err     = 1'b0; cov_pipelined    = 1'b0; cov_wait_state    = 1'b0;
    cov_htrans_seq    = 1'b0; cov_htrans_busy  = 1'b0; cov_subword       = 1'b0;
    cov_mtip_top_hart = 1'b0;
-   cov_mtip_masked   = 1'b0;
+   cov_mtime_rd_stall = 1'b0;
 end
 
 always @(negedge free_clk) begin
-   // FSM ownership states.
-   if (tb_ahb_aclint.dut.u_mtimer.fsm_state === 2'b00) cov_fsm_idle      = 1'b1;
-   if (tb_ahb_aclint.dut.u_mtimer.fsm_state === 2'b01) cov_fsm_ahb_pend  = 1'b1;
-   if (tb_ahb_aclint.dut.u_mtimer.fsm_state === 2'b10) cov_fsm_time_pend = 1'b1;
+   // LF observation: the tick fires, and the mirror is seen both trustworthy
+   // and invalidated (the latter only happens out of reset or after a deep
+   // sleep, so it is the bin that proves the invalidation path is real).
+   if (tb_ahb_aclint.dut.u_mtimer.lf_tick      === 1'b1) cov_lf_tick      = 1'b1;
+   if (tb_ahb_aclint.dut.u_mtimer.mirror_valid === 1'b1) cov_mirror_valid = 1'b1;
+   if (tb_ahb_aclint.dut.u_mtimer.mirror_valid === 1'b0) cov_mirror_stale = 1'b1;
 
    // Zicntr handshake.
    if (time_req === 1'b1) cov_time_req = 1'b1;
    if (time_gnt === 1'b1) cov_time_gnt = 1'b1;
 
-   // MTIMECMP write CDC handshake + the resulting AHB stall.
-   if (|tb_ahb_aclint.dut.u_mtimer.write_lo_busy === 1'b1) cov_wlo_busy = 1'b1;
-   if (|tb_ahb_aclint.dut.u_mtimer.write_hi_busy === 1'b1) cov_whi_busy = 1'b1;
-   if (tb_ahb_aclint.dut.u_mtimer.mtimecmp_write_stall === 1'b1) cov_wr_stall = 1'b1;
+   // Write shadows and the LF-side load. cov_load_ack is the one that matters:
+   // it proves an MTIME write actually reached the counter, which is the whole
+   // open-loop load path.
+   if (|tb_ahb_aclint.dut.u_mtimer.mtimecmp_lo_wr === 1'b1 ||
+       |tb_ahb_aclint.dut.u_mtimer.mtimecmp_hi_wr === 1'b1) cov_cmp_wr   = 1'b1;
+   if (tb_ahb_aclint.dut.u_mtimer.mtime_lo_wr === 1'b1 ||
+       tb_ahb_aclint.dut.u_mtimer.mtime_hi_wr === 1'b1)     cov_mtime_wr = 1'b1;
+   if (tb_ahb_aclint.dut.u_mtimer.load_ack_lf === 1'b1)     cov_load_ack = 1'b1;
 
    // Clock-gate advisory toggles both ways.
    if (hclk_en === 1'b1) cov_hclk_en_hi = 1'b1;
@@ -109,11 +114,9 @@ always @(negedge free_clk) begin
    if (htrans === 2'b01) cov_htrans_busy = 1'b1;
    if ((tb_ahb_aclint.dut.aph_valid === 1'b1) && (hsize !== 3'b010)) cov_subword = 1'b1;
 
-   // MTIP suppression mask engaged: comparator synced high AND that hart's
-   // MTIMECMP write is busy AND the masked output is low.
-   if (|(tb_ahb_aclint.dut.u_mtimer.irq_sync &
-         tb_ahb_aclint.dut.u_mtimer.mtimecmp_write_busy &
-         ~irq_m_timer) === 1'b1) cov_mtip_masked = 1'b1;
+   // The only wait state in the block: an MTIME read taken while the
+   // mirror is not yet trustworthy.
+   if (tb_ahb_aclint.dut.u_mtimer.mtime_read_stall === 1'b1) cov_mtime_rd_stall = 1'b1;
 end
 
 //----------------------------------------------------------------------------
@@ -132,14 +135,14 @@ endtask
 task cover_report;
    begin
       $display("---------------- FUNCTIONAL COVERAGE (this run) ----------------");
-      cover_emit("fsm_idle",        cov_fsm_idle);
-      cover_emit("fsm_ahb_pend",    cov_fsm_ahb_pend);
-      cover_emit("fsm_time_pend",   cov_fsm_time_pend);
+      cover_emit("lf_tick",         cov_lf_tick);
+      cover_emit("mirror_valid",    cov_mirror_valid);
+      cover_emit("mirror_stale",    cov_mirror_stale);
       cover_emit("time_req",        cov_time_req);
       cover_emit("time_gnt",        cov_time_gnt);
-      cover_emit("wlo_busy",        cov_wlo_busy);
-      cover_emit("whi_busy",        cov_whi_busy);
-      cover_emit("wr_stall",        cov_wr_stall);
+      cover_emit("cmp_wr",          cov_cmp_wr);
+      cover_emit("mtime_wr",        cov_mtime_wr);
+      cover_emit("load_ack",        cov_load_ack);
       cover_emit("hclk_en_hi",      cov_hclk_en_hi);
       cover_emit("hclk_en_lo",      cov_hclk_en_lo);
       cover_emit("irq_msw",         cov_irq_msw);
@@ -153,7 +156,7 @@ task cover_report;
       cover_emit("htrans_busy",     cov_htrans_busy);
       cover_emit("subword",         cov_subword);
       cover_emit("mtip_top_hart",   cov_mtip_top_hart);
-      cover_emit("mtip_masked",     cov_mtip_masked);
+      cover_emit("mtime_rd_stall",  cov_mtime_rd_stall);
       $display("----------------------------------------------------------------");
    end
 endtask

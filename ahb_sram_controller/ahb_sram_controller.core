@@ -23,7 +23,7 @@ filesets:
     files:
       - rtl/verilog/ahb_sram_controller.v
     depend:
-      - arvern:ips:arv_common:1.0
+      - arvern:ips:arv_primitives:1.0
 
 targets:
   default: &default

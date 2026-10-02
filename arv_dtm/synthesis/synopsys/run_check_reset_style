@@ -1,0 +1,77 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_check_reset_style
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_check_reset_style
+# Module Description : Run Synopsys PrimeTime to check the reset style of the
+#                      synthesized DTM netlist (./results/<top>.gate.v).
+#
+#                      By default it checks the last run_syn build: the top,
+#                      ARST_EN and DTM_TYPE come from ./rtl_params.tcl. Use
+#                      -design <top> to check another netlist in ./results
+#                      (its expected style then comes from the RTL default).
+#                      EXPECT=async|sync overrides the system-clock domain's
+#                      expected style; the probe-clock domain of the JTAG /
+#                      cJTAG transports is always expected async.
+#----------------------------------------------------------------------------
+
+# Parse command line arguments (mirrors run_syn: -design / -lib).
+LIB_FLAVOR="lib_default"
+DESIGN_NAME=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -lib|--lib)
+            LIB_FLAVOR="$2"
+            shift 2
+            ;;
+        -design|--design)
+            DESIGN_NAME="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [-lib <flavor>] [-design <top>]"
+            echo "  -lib <flavor>   : Select library flavor (default: lib_default)"
+            echo "  -design <top>   : Netlist to check (default: RTL_TOP of ./rtl_params.tcl)"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate library flavor
+if [[ ! -f "./libraries/setup_${LIB_FLAVOR}.tcl" ]]; then
+    echo "Error: Unknown library flavor '${LIB_FLAVOR}'"
+    echo "Valid flavors:"
+    for f in ./libraries/setup_*.tcl; do
+        flavor=$(basename "$f" .tcl | sed 's/^setup_//')
+        echo "  ${flavor}"
+    done
+    exit 1
+fi
+
+# Validate design name against the tops of the shared config table.
+if [[ -n "$DESIGN_NAME" ]]; then
+    VALID_DESIGNS=$(python3 ../../sim/rtl_sim/bin/gen_rtl_params.py --list-configs | \
+                    awk -F'\t' '/^[0-9]/{split($3,a," "); sub(/^top=/,"",a[1]); if(!(a[1] in s)){s[a[1]]=1; printf "%s ", a[1]}}')
+    if [[ " $VALID_DESIGNS " != *" $DESIGN_NAME "* ]]; then
+        echo "Error: Unknown design top '${DESIGN_NAME}'"
+        echo "Valid tops: ${VALID_DESIGNS}"
+        exit 1
+    fi
+fi
+
+# Export so check_reset_style_pt.tcl (and the library setup) can read them.
+export LIB_FLAVOR
+export DESIGN_NAME
+
+echo "Checking reset style of ${DESIGN_NAME:-the last run_syn build} (library flavor '${LIB_FLAVOR}')"
+
+pt_shell -f check_reset_style_pt.tcl

@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [-noquit|--interactive|-i] [-lib <flavor>] [-design <variant>]"
             echo "  -noquit, --noquit, --interactive, -i : Keep dc_shell open after synthesis"
             echo "  -lib <flavor>                        : Select library flavor (default: lib_default)"
-            echo "  -design <variant>                    : Select fabric variant (default: ahb_interconnect_generic)"
+            echo "  -design <variant>                    : Select fabric variant (default: ahb_interconnect_fused)"
             echo "                                         Valid: ${VALID_DESIGNS}"
             exit 1
             ;;

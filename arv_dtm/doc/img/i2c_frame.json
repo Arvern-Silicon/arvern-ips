@@ -1,0 +1,13 @@
+{signal: [
+  {name: 'scl_i', wave: '11nnnnnnnnn1'},
+  {name: 'sda_i', wave: '100101010001'},
+  {},
+  {name: 'field', wave: 'x64444444536',
+   data: ['START','a6','a5','a4','a3','a2','a1','a0','R/W','ACK','STOP']}
+],
+  head: {text: 'One I2C byte: START, 7 address bits + R/W, then the addressed target ACKs'},
+  foot: {text: ['tspan',
+    'SDA changes on the SCL falling edge; the only SDA edges while SCL is high are',
+    ['tspan', {x: 480, dy: 14}, 'START (fall) and STOP (rise). Sampled mid-high, after 2-FF sync + majority filter.']]},
+  config: {hscale: 2}
+}

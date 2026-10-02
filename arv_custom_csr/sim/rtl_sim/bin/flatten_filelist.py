@@ -20,7 +20,7 @@
 #
 # DUPLICATES: a source file (or +incdir+) reachable through more than one
 # route -- e.g. listed directly AND pulled in again via a nested -f that
-# references a shared library filelist (arv_common) -- is emitted only ONCE
+# references a shared library filelist (arv_primitives) -- is emitted only ONCE
 # (first occurrence wins, preserving compile order).  This prevents
 # duplicate-module elaboration errors when several IPs each pull the same
 # shared primitives.  Passthrough directives (+define+, -D, ...) are never

@@ -4,8 +4,8 @@
 
 # AHB Interconnect
 
-*Parameterizable AHB-Lite multi-manager / multi-subordinate fabric with three
-performance/area variants and a built-in default-subordinate ERROR responder.*
+*Parameterizable AHB-Lite multi-manager / multi-subordinate fabric in three
+variants, with a built-in ERROR responder for unmapped addresses.*
 
 ---
 
@@ -13,29 +13,34 @@ performance/area variants and a built-in default-subordinate ERROR responder.*
 
 - [Overview](#overview)
   - [Choosing a variant](#choosing-a-variant)
+  - [What differs between variants](#what-differs-between-variants)
   - [Glossary](#glossary)
 - [Architecture](#architecture)
-  - [Common building blocks](#common-building-blocks)
+  - [Building blocks](#building-blocks)
   - [Generic fabric](#generic-fabric)
   - [High-performance fabric](#high-performance-fabric)
   - [Fused fabric](#fused-fabric)
-  - [Global `hready` wiring](#global-hready-wiring)
-  - [Address-map requirements](#address-map-requirements)
+  - [`hready` wiring](#hready-wiring)
+  - [Address map](#address-map)
 - [Parameters](#parameters)
-- [Port summaries](#port-summaries)
-  - [Generic ports](#generic-ports)
-  - [Hiperf ports](#hiperf-ports)
-  - [Fused ports](#fused-ports)
+- [Ports](#ports)
+  - [Generic](#generic)
+  - [Hiperf](#hiperf)
+  - [Fused](#fused)
 - [Integration requirements](#integration-requirements)
+  - [Manager-supplied HMASTER bits](#manager-supplied-hmaster-bits)
+- [Architectural constraints](#architectural-constraints)
 - [Operation](#operation)
-  - [Single read through the generic fabric](#single-read-through-the-generic-fabric)
-  - [Arbitrated grant switch](#arbitrated-grant-switch)
-  - [Default-subordinate ERROR response](#default-subordinate-error-response)
-  - [Hiperf parallel access](#hiperf-parallel-access)
-  - [Fused Port-A vs Port-B contention](#fused-port-a-vs-port-b-contention)
 - [Lint waivers](#lint-waivers)
 - [Repository layout](#repository-layout)
 - [Verification](#verification)
+  - [Bench structure](#bench-structure)
+  - [Monitors](#monitors)
+  - [What is not covered](#what-is-not-covered)
+  - [Lint](#lint)
+  - [Simulation](#simulation)
+  - [Test suite](#test-suite)
+  - [Unit benches](#unit-benches)
 - [Synthesis](#synthesis)
 - [License](#license)
 
@@ -43,550 +48,630 @@ performance/area variants and a built-in default-subordinate ERROR responder.*
 
 ## Overview
 
-The **`ahb_interconnect`** IP is the central AHB-Lite fabric of the aRVern
-SoC family. It connects up to *N*<sub>M</sub> managers (CPU bus masters,
-DMAs, etc.) to *N*<sub>S</sub> subordinates (memories, peripherals,
-debug, etc.) using strict AHB-Lite semantics: two-phase pipelined
-transfers (address phase + data phase), centralised arbitration, and a
-combinational subordinate-mux selecting `hrdata` / `hreadyout` / `hresp`
-from the active slave.
+`ahb_interconnect` is the central AHB-Lite fabric of the aRVern SoC
+family. It connects `NR_M` managers (CPU buses, DMAs, debug) to `NR_S`
+subordinates (memories, peripherals) with standard AHB-Lite semantics:
+two-phase pipelined transfers, centralised arbitration, and a
+combinational subordinate mux returning `hrdata` / `hreadyout` / `hresp`
+from the selected subordinate.
 
-Three fabric variants are shipped, each implementing the same external
-AHB contract but trading **simplicity**, **parallel I/D bandwidth**, and
-**timing closure** differently:
+Three variants share the same port groups and AHB-Lite semantics and
+trade simplicity, parallel instruction/data bandwidth and timing closure
+differently; the behaviours that differ between them are listed under
+[What differs between variants](#what-differs-between-variants).
 
-| Variant                       | Optimised for                                        | Manager interface             | Subordinate space                                        | Memory-controller integration              |
-|-------------------------------|------------------------------------------------------|-------------------------------|----------------------------------------------------------|--------------------------------------------|
-| `ahb_interconnect_generic`    | **Simplicity** (small / low-bandwidth sub-systems)   | `NR_M` symmetric              | One shared bus                                           | External (AHB-attached)                    |
-| `ahb_interconnect_hiperf`     | **Parallel I/D bandwidth** (CPU fetch ∥ data access) | 1 executable + `NR_M` non-exec | Split: `NR_S_X` exec + `NR_S_NX` non-exec               | External (AHB-attached)                    |
-| `ahb_interconnect_fused`      | **Parallel I/D + higher frequency** (timing-critical SoCs) | 1 executable + `NR_M` non-exec | Split exec + non-exec, exec ports are direct memory pins | **Built-in** (ROM + SRAM controllers fused) |
+| Variant                    | Optimised for                                     | Managers                          | Subordinates                                              | Executable memories       |
+|----------------------------|---------------------------------------------------|-----------------------------------|-----------------------------------------------------------|---------------------------|
+| `ahb_interconnect_generic` | Simplicity (small or low-bandwidth systems)       | `NR_M` symmetric                  | One shared bus                                            | External AHB subordinates |
+| `ahb_interconnect_hiperf`  | Parallel fetch and data traffic                   | 1 executable + `NR_M` non-executable | Split: `NR_S_X` executable + `NR_S_NX` non-executable  | External AHB subordinates |
+| `ahb_interconnect_fused`   | Parallel fetch and data traffic at higher clock   | 1 executable + `NR_M` non-executable | Split; executable side exposed as memory-macro pins     | Built-in ROM / SRAM controllers |
 
-A **default subordinate** is instantiated by every variant: any AHB
-transfer with no matching one-hot decoder bit is steered to it, which
-drives a two-cycle ERROR response (`hresp = 1`) — protecting masters from
-hanging on unmapped addresses.
+Every variant contains a **default subordinate** per bus: one on the
+generic bus; on hiperf and fused, one on the non-executable bus and one
+on the executable bus. A transfer whose address matches no bit of the
+decoder that serves its bus is routed to it and answered with the AHB
+two-cycle ERROR response, so a manager never hangs on an unmapped
+address. On the executable bus this is what keeps `m_x` inside the
+executable space; on fused it also answers an `m_x` write.
 
 ### Choosing a variant
 
-- **Pick `generic`** when the sub-system has a single CPU/DMA bus, or
-  when the master mix is unlikely to issue instruction-fetch and
-  load-store traffic in parallel. The generic fabric uses one shared
-  bus, sustains one transfer per cycle, and is the smallest of the
-  three.
-- **Pick `hiperf`** when the CPU benefits from issuing instruction
-  fetches *in parallel* with load-store transfers — typically a
-  Harvard-style master pair driving an interconnect with separate
-  executable (ROM, code-RAM) and non-executable (peripherals, data-RAM)
-  subordinate spaces. The fabric sustains **two transfers per cycle**
-  in the common-case no-conflict pattern.
-- **Pick `fused`** when you need the same parallelism as `hiperf` but
-  also need to **close timing at a higher clock frequency**. Folding the
-  executable memory controllers inside the fabric removes one external
-  AHB hop and one mux level in the address-decode → memory-port path —
-  enough to shave critical-path delay at the cost of a small dual-port
-  arbiter inside each fused controller (which only fires when both an
-  instruction fetch and a data access hit the same memory in the same
-  cycle).
+- **`generic`** — one shared bus, one transfer per cycle, the smallest
+  of the three. Right for a single CPU/DMA bus or for master mixes that
+  rarely fetch and load/store at the same time.
+- **`hiperf`** — a Harvard-style pair of manager ports with separate
+  executable (ROM, code RAM) and non-executable (peripherals, data RAM)
+  subordinate spaces. Fetch and data transfers proceed in parallel: two
+  transfers per cycle when they target different spaces.
+- **`fused`** — the same parallelism as `hiperf`, with the executable
+  memory controllers folded into the fabric. That removes one AHB hop
+  and one mux level between the address decode and the memory port,
+  which is what buys the higher clock frequency; the price is a small
+  arbiter in each fused controller, which costs a wait state only when
+  the two ports collide on the same memory or when a data write's data
+  phase coincides with a read on either port (the SRAM controller's
+  one-cycle write hold).
 
-> **Default recommendation: start with `fused`.** It has the same
-> parallel-I/D bandwidth as `hiperf` but closes timing at a higher
-> frequency, at the cost of a small built-in arbiter that rarely fires
-> in practice (the typical I-cache-vs-D-cache or ROM-vs-SRAM traffic
-> pattern never collides on a single fused controller). Fall back to
-> `hiperf` only when your executable memory doesn't fit the fused
-> controller's single-port contract (e.g. executable flash with its own
-> controller, ECC SRAM with side-channel pins, multi-port banks), or
-> when you want to keep the executable subsystem as a separate IP
-> boundary for verification scope or third-party-IP reuse reasons.
+**Start with `fused`.** Fall back to `hiperf` when an executable memory
+does not fit the fused controller's single-port macro contract
+(executable flash with its own controller, ECC SRAM with side-channel
+pins, multi-port banks), or when the executable subsystem must stay a
+separate IP boundary.
+
+### What differs between variants
+
+The detailed statements live in the sections named in the first column;
+this table is the index.
+
+| Behaviour | `generic` | `hiperf` | `fused` |
+|-----------|-----------|----------|---------|
+| Manager ports ([Ports](#ports)) | `NR_M` symmetric `m_*` | `m_x_*` + `NR_M` × `m_nx_*` | As hiperf |
+| Subordinate ports ([Ports](#ports)) | `NR_S` × `s_*` | `NR_S_X` × `s_x_*` + `NR_S_NX` × `s_nx_*` | `NR_S_NX` × `s_nx_*`; executable side as `rom_*` / `sram_*` macro pins |
+| Decoders ([Address map](#address-map)) | One | Two; bit *i* of both must decode the same executable range | Two; ROM controllers on the low bits, SRAM on the high bits, same order on both |
+| Default subordinates ([Overview](#overview)) | One | Two: non-executable bus and executable bus | Two, as hiperf |
+| A write presented by `m_x` ([Hiperf](#hiperf), [Fused fabric](#fused-fabric)) | n/a | Forwarded to the executable subordinate unchanged | Diverted to the executable-side default subordinate, answered ERROR |
+| `s_hmaster_o` value ([Manager-supplied HMASTER bits](#manager-supplied-hmaster-bits)) | `M_HMASTER_ID` (default: manager index), OR the manager's tagged `m_hmaster_i` bits | `m_x` = `4'h0`; `m_nx[i]` = `M_NX_HMASTER_ID` (default: `i+1`), OR its tagged `m_nx_hmaster_i` bits | As hiperf |
+| Executable-side arbitration ([High-performance fabric](#high-performance-fabric), [Fused fabric](#fused-fabric)) | External arbiter | One `ahb_arbiter_2m` per executable subordinate: priority goes to the channel NOT granted last (every grant counts, contested or not); `m_x` first after reset | Inside each controller, `FIXED_B_PRIO`: `0` Port A first after reset then the port that lost the previous contest, `1` Port B always |
+| `hmaster` / `hprot` / `hauser` / `hmastlock` on the executable side ([Fused fabric](#fused-fabric)) | Forwarded | Forwarded to `s_x_*` | Not delivered to the controllers |
+| `hready` of an executable subordinate ([`hready` wiring](#hready-wiring)) | Bus `hready` | Its own `hreadyout` fed back | Internal |
+| Sources of `hresp = 1` ([Integration requirements](#integration-requirements)) | Default subordinate | Both default subordinates | Both default subordinates and the ROM controller on a Port-B write |
+| Transfer sizes above a word ([Integration requirements](#integration-requirements)) | Forwarded | Forwarded | SRAM controller ignores `hsize[2]`, `hsize[1:0] = 2'b11` produces no byte strobe; ROM controller ignores `hsize` |
 
 ### Glossary
 
-A few abbreviations used throughout this document and in the AHB-Lite
-spec ([ARM IHI 0033](https://developer.arm.com/documentation/ihi0033/)):
-
 | Term         | Meaning |
 |--------------|---------|
-| APH          | **A**ddress **ph**ase — cycle in which `haddr` / `htrans` / `hwrite` / `hsize` are presented on the bus. |
-| DPH          | **D**ata **ph**ase — cycle in which `hwdata` / `hrdata` are valid. Always one cycle after the corresponding APH, extended by `hready=0` wait states. |
-| NONSEQ / SEQ | `htrans = 2'b10` / `2'b11` — start of a new transfer / continuation of a burst. |
-| IDLE / BUSY  | `htrans = 2'b00` / `2'b01` — no transfer / burst pause. |
-| `hready_i`   | Bus-ready input to a slave (the integrator's combined `hreadyout` from all slaves). When `0`, the slave must hold its `dph_*` latches. |
-| HAUSER       | AHB sideband user-defined bits — repurposed here as the security / supervisor-mode signal `hsmode`. |
-| X / NX       | Short for **e**xecutable / **n**on-**e**xecutable, the two address-space partitions exposed by the hiperf and fused variants. |
+| APH          | Address phase: the cycle in which `haddr` / `htrans` / `hwrite` / `hsize` are presented. |
+| DPH          | Data phase: the cycle(s) in which `hwdata` / `hrdata` are valid, one cycle after the APH, extended by wait states (`hready = 0`). |
+| NONSEQ / SEQ | `htrans = 2'b10` / `2'b11`: a new transfer / the continuation of a burst. |
+| IDLE / BUSY  | `htrans = 2'b00` / `2'b01`: no transfer / a pause inside a burst. Both are answered with a zero-wait OKAY. |
+| HAUSER       | AHB user-defined sideband, `HAUSER_W` bits wide. The aRVern peripherals use it as the secure-mode signal `hsmode`; the fabric only forwards it. |
+| X / NX       | Executable / non-executable: the two address-space partitions of the hiperf and fused variants. |
+| Level-2 channel | Hiperf only: the pair of `ahb_manager_if` instances (one fed by `m_x`, one by the non-executable bus) and the `ahb_arbiter_2m` in front of each executable subordinate. Internal to the fabric. |
+
+The AHB-Lite specification is
+[ARM IHI 0033](https://developer.arm.com/documentation/ihi0033/).
 
 ---
 
 ## Architecture
 
-### Common building blocks
+### Building blocks
 
-All three variants compose the same five leaf modules:
-
-| Leaf                       | Role |
+| Module                     | Role |
 |----------------------------|------|
-| `ahb_manager_if`           | Per-master front-end: detects address-phase, latches it when the bus is busy (`m_aph_pending`), tracks data-phase ongoing (`m_dph_ongoing`), drives `m_request_o`, replays the cached APH once `m_grant_i` arrives. Provides the master with a stalling `m_hreadyout_o` that masks the global bus while the master's APH waits for grant. |
-| `ahb_manager_mux`          | Hierarchical wrapper: instantiates `NR_M` × `ahb_manager_if` and an OR-of-AND grant-mux that drives a single APH onto the shared bus from the granted master. Forwards subordinate-side `hrdata` / `hreadyout` / `hresp` to all masters (gated by each master's `m_dph_ongoing`). |
-| `ahb_subordinate_mux`      | One-hot subordinate select: fans the shared APH out to `NR_S` slaves (asserting one `s_hsel_o` based on `s_decoder_1hot_i`), and one-hot-muxes `hrdata` / `hreadyout` / `hresp` back. Also routes `hmaster_o` so a slave can tell which master is talking. |
-| `ahb_default_subordinate`  | Synthesises a two-cycle ERROR response (`hresp=1`, `hreadyout` low then high) whenever it is selected. Returns `hrdata=0`. Selected combinationally when the decoder one-hot is all zero. |
-| `ahb_arbiter_2m`           | 2-manager round-robin arbiter using a single toggle-priority flop. *Used by hiperf and fused only — for the executable side. The generic fabric expects the integrator to supply an external arbiter.* |
+| `ahb_manager_if`           | Per-manager front end. Detects an address phase, caches it when the bus is busy, asks the arbiter for the bus, replays the cached address phase when granted, and tracks the manager's data phase. Stalls the manager (`m_hreadyout_o = 0`) while its address phase waits for the grant. |
+| `ahb_manager_mux`          | `NR_M` × `ahb_manager_if` plus the grant-controlled mux that puts one address phase on the shared bus, and the return path of `hrdata` / `hreadyout` / `hresp` to the manager that owns the data phase. |
+| `ahb_subordinate_mux`      | Fans the shared bus out to `NR_S` subordinates, asserts the one `s_hsel_o` selected by the decoder, forces `s_htrans_o` to IDLE while no granted address phase is on the bus, and muxes `hrdata` / `hreadyout` / `hresp` back from the subordinate that owns the data phase. Also forwards `hmaster`, so a subordinate can tell which manager is talking. |
+| `ahb_default_subordinate`  | Answers every NONSEQ/SEQ transfer with the AHB two-cycle ERROR (`hreadyout` low then high, `hresp = 1`, `hrdata = 0`). One per bus, selected when that bus's decoder one-hot is all zero; the fused executable-side instance is also selected by an `m_x` write. |
+| `ahb_arbiter_2m`           | Two-manager round-robin arbiter (one toggle-priority flop, reset to channel 0 = `m_x` first). Hiperf only, one per executable subordinate. |
+| `ahb_fused_rom_ctrl`, `ahb_fused_sram_ctrl` | Fused only: dual-port ROM / SRAM controllers with memory-macro pins on one side and two AHB ports on the other. |
+
+The generic fabric uses the first four; hiperf adds `ahb_arbiter_2m` and
+a second default subordinate; fused replaces the executable subordinates
+with the two controllers and keeps both default subordinates.
 
 ### Generic fabric
 
 ![Generic fabric block diagram](img/ahb_interconnect_generic.png)
 
-`ahb_interconnect_generic` is a thin top-level that wires:
+`ahb_interconnect_generic` wires one `ahb_manager_mux`, one
+`ahb_subordinate_mux` with `NR_S + 1` slots (the extra slot is the
+default subordinate) and one `ahb_default_subordinate`.
 
-- One `ahb_manager_mux` (with `NR_M` embedded `ahb_manager_if` instances).
-- One `ahb_subordinate_mux` sized for `NR_S+1` slots (the extra slot is
-  the default subordinate).
-- One `ahb_default_subordinate` selected when `s_decoder_1hot_i == 0`.
+Arbitration and address decoding are the integrator's: the fabric
+drives `m_request_o` to an external arbiter and consumes `m_grant_i`;
+it drives the system address `s_decoder_addr_o` to an external decoder
+and consumes the one-hot `s_decoder_1hot_i`.
 
-Arbitration is delegated to the integrator: the manager mux drives
-`m_request_o[NR_M-1:0]` outward, and consumes `m_grant_i[NR_M-1:0]` from
-an external arbiter. The decoder is also external — the IP receives an
-already-decoded `s_decoder_1hot_i` and emits the system address
-`s_decoder_addr_o` to feed it.
-
-The fabric is fully combinational below the address-latching FFs inside
-`ahb_manager_if`: address-phase signals propagate from master to slave
-within one cycle, and data-phase signals (`hrdata`, `hreadyout`,
-`hresp`) likewise return within one cycle.
+The fabric adds no pipeline stage: an address phase reaches the
+selected subordinate in the cycle the manager presents it, and
+`hrdata` / `hreadyout` / `hresp` reach the manager in the cycle the
+subordinate drives them. Its state is the address-phase caches and the
+phase-tracking flops of `ahb_manager_if`, the data-phase select of
+`ahb_subordinate_mux` and the default subordinate's two-cycle ERROR;
+hiperf adds the executable-side arbiters' priority bits, fused the
+controllers' state machines.
 
 ### High-performance fabric
 
 ![Hiperf fabric block diagram](img/ahb_interconnect_hiperf.png)
 
-`ahb_interconnect_hiperf` extends the generic fabric with a *parallel
-executable path*. The subordinate space is split:
+`ahb_interconnect_hiperf` splits the subordinate space into `NR_S_X`
+**executable** subordinates (ROM, code RAM) and `NR_S_NX`
+**non-executable** ones (peripherals, data RAM, debug), and exposes two
+kinds of manager port:
 
-- `NR_S_X` **executable subordinates** (typically ROM + executable RAM).
-- `NR_S_NX` **non-executable subordinates** (peripherals, data RAM,
-  debug, ...).
+- `m_x_*` — one executable-side manager, intended for instruction fetch.
+- `m_nx_*[NR_M-1:0]` — `NR_M` non-executable managers (CPU data bus,
+  DMAs, …), arbitrated by an external arbiter exactly as in the generic
+  fabric.
 
-Two manager interfaces are exposed:
+A non-executable manager may also target an executable subordinate (a
+CPU data access to ROM, for instance). To keep that from sharing the
+fetch path, each executable subordinate sits behind its own **level-2
+channel**: a pair of `ahb_manager_if` instances — one fed by `m_x`, one
+by the non-executable bus — and an `ahb_arbiter_2m`. These are
+internal; the integrator sees a plain AHB subordinate port. The arbiter
+resets to `m_x`-first and afterwards gives priority to the channel that was
+NOT granted last. Every grant moves it, contested or not: a lone `m_x`
+fetch hands priority to the non-executable side, so the next collision is
+won by that side.
 
-- **`m_x_*`** — one dedicated executable-side manager (intended for CPU
-  instruction fetch). Drives directly into a per-executable-slave
-  arbitration + manager-if pair.
-- **`m_nx_*[NR_M-1:0]`** — `NR_M` standard non-executable managers
-  (CPU data bus, DMAs, ...). Same arbitration scheme as the generic
-  fabric (external arbiter on `m_nx_request_o` / `m_nx_grant_i`).
+An `m_x` access outside the executable decoder is answered ERROR by the
+executable-side default subordinate; this is the only mechanism that
+keeps the fetch port inside the executable space. An `m_x` write inside
+it is forwarded to the subordinate unchanged (see the note under
+[Hiperf](#hiperf) ports).
 
-The non-executable side **can also target executable subordinates** (a
-CPU data access to ROM, for example). To make this work without sharing
-the executable bus with the instruction-fetch path, each executable
-subordinate is fronted by **a pair of `ahb_manager_if` instances and an
-`ahb_arbiter_2m`** (one channel from `m_x`, one from the NX-side mux).
-The two managers and the arbiter live *inside* the interconnect — the
-integrator never sees them.
-
-**Concurrency:** in the common case where the executable manager fetches
-an instruction from one executable subordinate (e.g. ROM) while a
-non-executable manager reads/writes a non-executable subordinate (e.g. a
-peripheral), the two transfers proceed in parallel and the fabric
-sustains *two transfers per cycle*.
+When the executable manager fetches from an executable subordinate
+while a non-executable manager accesses a non-executable one — the
+common case — the two transfers proceed in parallel and the fabric
+sustains two transfers per cycle.
 
 ### Fused fabric
 
 ![Fused fabric block diagram](img/ahb_interconnect_fused.png)
 
 `ahb_interconnect_fused` keeps the X / NX split of the hiperf variant
-but replaces each external executable AHB subordinate with an *internal,
-dual-port memory controller*:
+but replaces each executable AHB subordinate with an internal dual-port
+memory controller: `NR_S_X_ROM` × `ahb_fused_rom_ctrl` driving ROM
+macros and `NR_S_X_SRAM` × `ahb_fused_sram_ctrl` driving SRAM macros.
+`NR_S_X_ROM = 0` gives a ROM-less executable space; `NR_S_X_SRAM` is at
+least 1.
 
-- `NR_S_X_ROM` × `ahb_fused_rom_ctrl` instances driving ROM macros.
-- `NR_S_X_SRAM` × `ahb_fused_sram_ctrl` instances driving SRAM macros.
+Each controller has two AHB ports:
 
-Each fused controller exposes **two AHB ports**:
+- **Port A** is fed by the executable manager `m_x`. It is read-only
+  and 32-bit on both controllers. A write presented by `m_x` never
+  reaches a controller: the fabric routes it to the executable-side
+  default subordinate, which answers ERROR, and the memory is untouched.
+- **Port B** is fed by the non-executable side, i.e. any
+  non-executable manager whose access decodes into the executable
+  region. It supports reads and byte-enabled writes on the SRAM
+  controller; on the ROM controller a write is answered with the
+  two-cycle ERROR.
 
-- **Port A** — fed by the `m_x` (instruction-fetch) manager. Read-only
-  for the ROM controller; read + write (with byte enables) for the SRAM
-  controller.
-- **Port B** — fed by the NX subordinate-mux (i.e. *any* non-executable
-  manager whose access hits the executable address region).
+The two ports share the macro's single chip-enable and address bus.
+When both present an address phase to the same controller in the same
+cycle, the controller's arbiter serves one and holds the other for one
+wait state. `FIXED_B_PRIO` selects the policy: `0` (default) serves
+Port A first after reset and then gives each contest to the port that
+lost the previous one (the SRAM controller's priority bit also advances
+on uncontested grants, so the winner is not a strict alternation); `1`
+always serves Port B, which removes `a_hsel_i` from the Port-B leg of
+the memory-address mux at the cost of letting heavy non-executable
+traffic starve instruction fetch.
 
-Both ports share a single memory-macro chip-enable + address bus. When
-both ports race the same controller in the same cycle, an internal
-arbiter picks one to drive the macro this cycle and stalls the other
-(`hreadyout = 0`) for one extra wait state.
+A Port-B write whose data phase collides with a read **on either port**
+— the pause is port-agnostic, so a pipelined Port-B write→read triggers it
+too — is held in a one-word buffer and written to the macro in the very next
+cycle, during which neither port is granted. So a write reaches the macro at
+most one cycle after its data phase whatever the traffic pattern. The port
+that loses a contest in a write's data phase takes **two** wait states, not
+one: arbitration is masked during the write cycle, so the loser is not
+re-granted until the cycle after. That hold is what makes the one-cycle write
+bound above true. An address phase first presented during the write cycle is
+held and granted the next cycle: one wait state. A Port-B read of the buffered word in the collision cycle is
+served from the buffer; Port A has no such forwarding, so ordering
+between a data write and a subsequent instruction fetch of the same
+word remains the CPU's job (FENCE.I).
 
-The `FIXED_B_PRIO` parameter (default `1'b0`, round-robin) lets the
-integrator force a fixed Port-B priority instead — Port-B always wins,
-which simplifies the memory-address mux fan-in (Port-A's `a_hsel_i` no
-longer drives the address-select) at the cost of letting heavy NX
-traffic *starve* the executable side. Both schemes are
-regression-covered (see [Verification](#verification)).
+The non-executable managers' `hmaster` / `hprot` / `hauser` /
+`hmastlock` are not delivered to the fused controllers. Any per-master
+or privilege policy on executable memory — for example keeping a DMA or
+the debug system-bus access from writing code RAM — must be enforced
+upstream. The hiperf variant, by contrast, forwards these signals to
+its executable subordinates.
 
-#### Fused leaves: `ahb_fused_rom_ctrl` and `ahb_fused_sram_ctrl`
+The controllers carry no memory-size parameter: `rom_addr_o` /
+`sram_addr_o` are full 30-bit word addresses and the integrator slices
+the bits the macro needs. Both complete a read one cycle after the
+command and expect the macro to do the same (see the memory-macro
+contract under [Integration requirements](#integration-requirements)).
 
-The two fused controllers live in this IP rather than in their parent
-IPs (`ahb_rom_controller`, `ahb_sram_controller`) because they are not
-standalone AHB slaves — they have direct memory-macro pins on one side
-and *two* AHB ports on the other. Both are sized for arbitrary memory
-depth via a `MEM_SIZE` parameter (bytes), matching the parent IPs.
+### `hready` wiring
 
-- **`ahb_fused_rom_ctrl`** — Port A read-only, Port B read-with-write-
-  attempt (any write returns AHB ERROR but does not corrupt the
-  ROM). One-cycle read latency. ~280 lines of RTL, no FSM (purely
-  combinational arbitration + APH/DPH bookkeeping FFs).
-- **`ahb_fused_sram_ctrl`** — both ports support read + write with byte
-  enables. Reuses the same read-after-write pause-buffer logic as the
-  standalone `ahb_sram_controller`, but extended with the dual-port
-  arbiter. ~480 lines of RTL.
+![hready broadcast, generic fabric](img/ahb_interconnect_generic_hready.png)
 
-Per-leaf operational waveforms are best read from their unit
-testbenches in `bench/verilog/tb_ahb_fused_{rom,sram}_ctrl.v` (driven by
-the dedicated `run_fused_rom` / `run_fused_sram` regressions).
+AHB-Lite requires the `hreadyout` of the subordinate that owns the data
+phase to be combined into one bus `hready` seen by every subordinate.
+`ahb_subordinate_mux` selects that `hreadyout` with the same one-hot
+that selects `hrdata` and feeds it back to all subordinates on
+`s_hready_o`.
 
-### Global `hready` wiring
+**`m_hready_o` is per-manager, not a broadcast.** Each manager sees
+`m_hready_o[k] = dph_ongoing ? hreadyout : aph_pending ? 0 : 1`, so a
+manager that does not own the data phase reads `hready = 1` while the
+bus is stalled, and one with an address phase waiting for a grant reads
+`0`. That is what lets a manager be held off without stalling the
+others; the combining requirement above is a subordinate-side one.
 
-![Hready broadcast — generic fabric](img/ahb_interconnect_generic_hready.png)
+The hiperf and fused variants run two independent `hready` networks,
+one per sub-fabric, so a wait state on one side does not stall the
+other. On the hiperf executable ports each subordinate is alone on its
+bus, so its `hready` is simply its own `hreadyout` fed back
+(`s_x_hready_o[i] = s_x_hreadyout_i[i]`) — which is why a registered
+`hreadyout` is mandatory for executable subordinates (Constraint #3).
 
-Per AHB-Lite, the **active subordinate's `hreadyout`** must be broadcast
-back to every subordinate as `hready_i` (so they all see the same DPH
-extension), and to every manager as `m_hready_o`. The
-`ahb_subordinate_mux` collapses the per-slave `s_hreadyout_i[NR_S-1:0]`
-vector down to a single `hreadyout_o` via the same one-hot select that
-muxes `hrdata`; that single `hreadyout` is then fed back into all
-slaves' `hready_i` and (through `ahb_manager_mux`) into all masters'
-`m_hready_o`. The diagram above traces this fan-out for the generic
-fabric.
+![hready broadcast, hiperf fabric](img/ahb_interconnect_hiperf_hready.png)
 
-The hiperf and fused variants run **two independent `hready` broadcast
-networks** — one per sub-fabric (X and NX) — so a wait state on one
-side doesn't stall the other side and the variants can sustain their
-2-transfer-per-cycle peak throughput:
+### Address map
 
-![Hready broadcast — hiperf fabric (X and NX networks)](img/ahb_interconnect_hiperf_hready.png)
+The address map is the integrator's decoder; the fabric imposes none,
+but two variants constrain how the decoders relate to each other.
 
-### Address-map requirements
+**Hiperf**: bit *i* of `s_x_decoder_1hot_i` and bit *i* of
+`s_decoder_1hot_i` both select `s_x_*[i]`, each through one side of its
+level-2 channel, so the two decoders must cover the same ranges for the
+executable subordinates — see the note in the hiperf ports section.
+A mismatch routes a fetch and a data access at the same address to
+different memories, with nothing to report it.
 
-The interconnect itself doesn't impose an address map — that's the
-integrator's decoder. But the **fused** variant has one subtle ordering
-constraint worth highlighting: the `s_x_decoder_1hot_i` one-hot bits
-must be ordered as `{ NR_S_X_SRAM SRAM bits, NR_S_X_ROM ROM bits }` —
-ROM controllers occupy the **low** decoder bits, SRAM controllers
-occupy the **high** decoder bits. This is the implicit contract baked
-into the fused top-level's port-bundling order; getting it wrong sends
-SRAM accesses to the ROM controller (write-attempt → ERROR) and vice
-versa.
-
-The generic and hiperf variants impose no such ordering — every
-subordinate slot is symmetrically wired to its `s_*[i]` port group.
+**Fused**: the executable one-hot
+`s_x_decoder_1hot_i` is laid out as `{ NR_S_X_SRAM SRAM bits,
+NR_S_X_ROM ROM bits }` — ROM controllers on the low bits, SRAM
+controllers on the high bits — and the low `NR_S_X` bits of the
+system-wide `s_decoder_1hot_i` must follow the same order, since they
+route non-executable accesses to the same controllers. Getting it wrong
+sends SRAM accesses to a ROM controller (writes then return ERROR) and
+vice versa. Every variant otherwise wires each subordinate slot
+symmetrically to its `s_*[i]` port group.
 
 ---
 
 ## Parameters
 
-| Variant | Parameter      | Default | Purpose                                                                   |
-|---------|----------------|---------|---------------------------------------------------------------------------|
-| generic | `NR_M`         | `3`     | Number of (symmetric) AHB managers.                                       |
-| generic | `NR_S`         | `5`     | Number of AHB subordinates (excludes the default subordinate slot).       |
-| generic | `HAUSER_W`     | `1`     | Width of the `HAUSER` sideband bus. Minimum `1`.                          |
-| hiperf  | `NR_M`         | `2`     | Number of non-executable managers (the executable manager is hard-coded as 1). |
-| hiperf  | `NR_S_X`       | `2`     | Number of executable subordinates (ROM, code-RAM, …).                     |
-| hiperf  | `NR_S_NX`      | `3`     | Number of non-executable subordinates.                                    |
-| hiperf  | `HAUSER_W`     | `1`     | Same as generic.                                                          |
-| hiperf  | `NR_S` (local) | `NR_S_X + NR_S_NX` | Derived total slave count; not directly exposed at instance level. |
-| fused   | `NR_M`         | `2`     | Same role as hiperf.                                                      |
-| fused   | `NR_S_X_ROM`   | `1`     | Number of fused ROM controllers (low decoder bits).                       |
-| fused   | `NR_S_X_SRAM`  | `1`     | Number of fused SRAM controllers (high decoder bits).                     |
-| fused   | `NR_S_NX`      | `3`     | Number of non-executable subordinates.                                    |
-| fused   | `HAUSER_W`     | `1`     | Same as generic.                                                          |
-| fused   | `FIXED_B_PRIO` | `1'b0`  | Arbitration policy inside all fused controllers. `0` = round-robin (toggle), `1` = fixed Port-B priority (data bus wins; removes `a_hsel_i` from the memory-address mux fan-in for tighter timing, at the cost of allowing Port-A starvation). |
-| generic | `ASYNC_RST_EN` | `1`     | Reset architecture: `1` = asynchronous active-low reset (default); `0` = synchronous reset. Common to all variants; threaded to every flop via the shared `arv_ipdff` primitive (and `arv_synchronizer` for CDC). Synchronous mode requires a running clock during reset assertion. See the repo README's *Reset architecture* section. |
-| hiperf  | `ASYNC_RST_EN` | `1`     | Same as generic.                                                          |
-| fused   | `ASYNC_RST_EN` | `1`     | Same as generic.                                                          |
+| Variant | Parameter      | Default | Purpose |
+|---------|----------------|---------|---------|
+| all     | `HAUSER_W`     | `1`     | Width of the HAUSER sideband. Minimum 1. |
+| all     | `ASYNC_RST_EN` | `1`     | `1`: asynchronous active-low reset; `0`: synchronous reset (the clock must run while reset is asserted). See the repository README, *Reset architecture*. |
+| generic | `NR_M`         | `3`     | Number of managers. Maximum 16. |
+| generic | `NR_S`         | `5`     | Number of subordinates, not counting the default subordinate. |
+| generic | `M_HMASTER_ID` | all-zero | HMASTER ID of each manager, 4 bits per manager. All-zero selects the default numbering: manager *i* is `i`. |
+| generic | `M_HMASTER_TAG` | all-zero | Per manager, the bits of `m_hmaster_i` ORed into its ID. All-zero: `m_hmaster_i` is ignored. See [Manager-supplied HMASTER bits](#manager-supplied-hmaster-bits). |
+| hiperf  | `NR_M`         | `2`     | Number of non-executable managers (there is always one executable manager). Maximum 15. |
+| hiperf  | `NR_S_X`       | `2`     | Number of executable subordinates. |
+| hiperf  | `NR_S_NX`      | `3`     | Number of non-executable subordinates. |
+| hiperf  | `M_NX_HMASTER_ID` | all-zero | HMASTER ID of each non-executable manager, 4 bits per manager; `4'h0` belongs to the executable manager and is refused. All-zero selects the default numbering: manager *i* is `i+1`. |
+| hiperf  | `M_NX_HMASTER_TAG` | all-zero | Per non-executable manager, the bits of `m_nx_hmaster_i` ORed into its ID. All-zero: `m_nx_hmaster_i` is ignored. |
+| fused   | `NR_M`         | `2`     | As hiperf. |
+| fused   | `NR_S_X_ROM`   | `1`     | Number of fused ROM controllers (low decoder bits). May be 0. |
+| fused   | `NR_S_X_SRAM`  | `1`     | Number of fused SRAM controllers (high decoder bits). Minimum 1 — the `sram_*` ports are sized by it directly, so a ROM-only executable space cannot be expressed. |
+| fused   | `NR_S_NX`      | `3`     | Number of non-executable subordinates. |
+| fused   | `M_NX_HMASTER_ID`, `M_NX_HMASTER_TAG` | all-zero | As hiperf. |
+| fused   | `FIXED_B_PRIO` | `0`     | Arbitration inside the fused controllers: `0` the port that lost the previous contest wins the next (Port A first after reset), `1` Port B (data) always wins. |
 
 ---
 
-## Port summaries
+## Ports
 
-Buses below are vector-packed in `{slot[N-1], …, slot[1], slot[0]}`
-LSB-first order — e.g. `m_haddr_i[31:0]` belongs to master 0,
-`[63:32]` to master 1, and so on. Same convention applies to all
-`NR_*`-multiplied ports.
+Multi-instance buses are packed slot 0 first: `m_haddr_i[31:0]` belongs
+to manager 0, `[63:32]` to manager 1, and so on.
 
-### Generic ports
+### Generic
 
-| Direction | Port                | Width                  | Description                                                    |
-|-----------|---------------------|------------------------|----------------------------------------------------------------|
-| in        | `hclk_i`            | 1                      | Bus clock                                                      |
-| in        | `hresetn_i`         | 1                      | Active-low reset — **asynchronous** assertion when `ASYNC_RST_EN=1` (default), **synchronous** when `ASYNC_RST_EN=0` (sync-deassert required) |
-| out       | `hclk_en_o`         | 1                      | Combined clock-gate enable; drives the integrator's ICG cell   |
-| in        | `m_haddr_i`         | `32*NR_M`              | Per-master AHB address                                         |
-| in        | `m_hauser_i`        | `HAUSER_W*NR_M`        | Per-master HAUSER sideband (per-IP semantics; e.g. `hsmode`)   |
-| in        | `m_hburst_i`        | `3*NR_M`               | Per-master burst type                                          |
-| in        | `m_hmastlock_i`     | `NR_M`                 | Per-master locked transfer indicator                           |
-| in        | `m_hprot_i`         | `4*NR_M`               | Per-master protection control (cache / buf / priv / data)      |
-| in        | `m_hsize_i`         | `3*NR_M`               | Per-master transfer size (byte / half / word / …)              |
-| in        | `m_htrans_i`        | `2*NR_M`               | Per-master transfer type (IDLE / BUSY / NONSEQ / SEQ)          |
-| in        | `m_hwdata_i`        | `32*NR_M`              | Per-master write data                                          |
-| in        | `m_hwrite_i`        | `NR_M`                 | Per-master write enable                                        |
-| out       | `m_hrdata_o`        | `32*NR_M`              | Per-master read data (gated by each master's DPH ownership)    |
-| out       | `m_hready_o`        | `NR_M`                 | Per-master `hready` (stalls master while its APH waits)        |
-| out       | `m_hresp_o`         | `NR_M`                 | Per-master `hresp` (gated by DPH ownership)                    |
-| out       | `m_request_o`       | `NR_M`                 | Arbiter request — goes to integrator's arbiter                 |
-| in        | `m_grant_i`         | `NR_M`                 | Arbiter grant — from integrator's arbiter                      |
-| in        | `s_decoder_1hot_i`  | `NR_S`                 | One-hot subordinate select from integrator's decoder           |
-| out       | `s_decoder_addr_o`  | 32                     | System address feeding the integrator's decoder                |
-| in        | `s_hrdata_i`        | `32*NR_S`              | Per-slave read data                                            |
-| in        | `s_hreadyout_i`     | `NR_S`                 | Per-slave ready-out                                            |
-| in        | `s_hresp_i`         | `NR_S`                 | Per-slave response                                             |
-| out       | `s_haddr_o`         | `32*NR_S`              | Per-slave address (broadcast; effective only when `s_hsel_o[i]` is asserted) |
-| out       | `s_hauser_o`        | `HAUSER_W*NR_S`        | Per-slave HAUSER sideband (forwarded from the granted master)  |
-| out       | `s_hburst_o`        | `3*NR_S`               | Per-slave burst type (forwarded)                               |
-| out       | `s_hmaster_o`       | `4*NR_S`               | 4-bit master ID derived from the grant one-hot                 |
-| out       | `s_hmastlock_o`     | `NR_S`                 | Per-slave locked transfer indicator (forwarded)                |
-| out       | `s_hprot_o`         | `4*NR_S`               | Per-slave protection control (forwarded)                       |
-| out       | `s_hready_o`        | `NR_S`                 | Global `hready` broadcast back to each slave                   |
-| out       | `s_hsel_o`          | `NR_S`                 | Per-slave select (one-hot, mirrors `s_decoder_1hot_i`)         |
-| out       | `s_hsize_o`         | `3*NR_S`               | Per-slave transfer size (forwarded)                            |
-| out       | `s_htrans_o`        | `2*NR_S`               | Per-slave transfer type (forwarded)                            |
-| out       | `s_hwdata_o`        | `32*NR_S`              | Per-slave write data (forwarded)                               |
-| out       | `s_hwrite_o`        | `NR_S`                 | Per-slave write enable (forwarded)                             |
+| Direction | Port                | Width           | Description |
+|-----------|---------------------|-----------------|-------------|
+| in        | `hclk_i`            | 1               | Bus clock |
+| in        | `hresetn_i`         | 1               | Active-low reset; asynchronous when `ASYNC_RST_EN = 1`, synchronous otherwise |
+| out       | `hclk_en_o`         | 1               | Clock-gate enable for the integrator's ICG cell (see [Integration requirements](#integration-requirements)) |
+| in        | `m_haddr_i`         | `32*NR_M`       | Manager address |
+| in        | `m_hauser_i`        | `HAUSER_W*NR_M` | Manager HAUSER sideband |
+| in        | `m_hburst_i`        | `3*NR_M`        | Manager burst type |
+| in        | `m_hmaster_i`       | `4*NR_M`        | Manager-supplied HMASTER bits; only the bits set in `M_HMASTER_TAG` are used. Address-phase timing, like `m_haddr_i`. Tie to 0 when unused |
+| in        | `m_hmastlock_i`     | `NR_M`          | Manager locked-transfer indicator |
+| in        | `m_hprot_i`         | `4*NR_M`        | Manager protection control |
+| in        | `m_hsize_i`         | `3*NR_M`        | Manager transfer size |
+| in        | `m_htrans_i`        | `2*NR_M`        | Manager transfer type |
+| in        | `m_hwdata_i`        | `32*NR_M`       | Manager write data |
+| in        | `m_hwrite_i`        | `NR_M`          | Manager write enable |
+| out       | `m_hrdata_o`        | `32*NR_M`       | Manager read data, valid for the manager that owns the data phase |
+| out       | `m_hready_o`        | `NR_M`          | Manager `hready`; low while the manager's address phase waits for the bus or its data phase is extended |
+| out       | `m_hresp_o`         | `NR_M`          | Manager response |
+| out       | `m_request_o`       | `NR_M`          | Request to the external arbiter |
+| in        | `m_grant_i`         | `NR_M`          | One-hot grant from the external arbiter |
+| out       | `s_decoder_addr_o`  | 32              | System address for the external decoder |
+| in        | `s_decoder_1hot_i`  | `NR_S`          | One-hot subordinate select from the external decoder |
+| in        | `s_hrdata_i`        | `32*NR_S`       | Subordinate read data |
+| in        | `s_hreadyout_i`     | `NR_S`          | Subordinate ready-out |
+| in        | `s_hresp_i`         | `NR_S`          | Subordinate response |
+| out       | `s_haddr_o`         | `32*NR_S`       | Address, broadcast to all subordinates; qualified by `s_hsel_o[i]` |
+| out       | `s_hauser_o`        | `HAUSER_W*NR_S` | HAUSER sideband of the granted manager |
+| out       | `s_hburst_o`        | `3*NR_S`        | Burst type |
+| out       | `s_hmaster_o`       | `4*NR_S`        | HMASTER of the granted manager: its ID ORed with its tagged `m_hmaster_i` bits. By default the ID is the manager index on **generic**; **hiperf and fused** reserve `4'h0` for the executable manager and number non-executable manager *i* **`i+1`** |
+| out       | `s_hmastlock_o`     | `NR_S`          | Locked-transfer indicator |
+| out       | `s_hprot_o`         | `4*NR_S`        | Protection control |
+| out       | `s_hready_o`        | `NR_S`          | Bus `hready`, to be connected to every subordinate's `hready` input |
+| out       | `s_hsel_o`          | `NR_S`          | Subordinate select (one-hot, straight from the decoder). May be asserted with `s_htrans_o = IDLE` while a grant is parked on an idle manager |
+| out       | `s_hsize_o`         | `3*NR_S`        | Transfer size |
+| out       | `s_htrans_o`        | `2*NR_S`        | Transfer type of the granted manager; forced to IDLE while no granted address phase is on the bus |
+| out       | `s_hwdata_o`        | `32*NR_S`       | Write data |
+| out       | `s_hwrite_o`        | `NR_S`          | Write enable |
 
-### Hiperf ports
+### Hiperf
 
-The hiperf top adds (a) a single dedicated **executable-side manager**
-(`m_x_*`) and (b) a second decoder over the executable address sub-set
-(`s_x_decoder_1hot_i`, `s_x_decoder_addr_o`); it splits the subordinate
-fan-out into `s_x_*` (`NR_S_X` executable slaves) and `s_nx_*`
-(`NR_S_NX` non-executable slaves). Clock, reset and the
-non-executable-side arbiter contract are identical to the generic
-fabric.
+Clock, reset and `hclk_en_o` are as in the generic fabric. The manager
+side has two groups:
 
-**Executable manager** (single instance, no `[NR_M]` repetition):
+- **`m_x_*`** — the single executable manager: `m_x_haddr_i`,
+  `m_x_hauser_i`, `m_x_hburst_i`, `m_x_hmastlock_i`, `m_x_hprot_i`,
+  `m_x_hsize_i`, `m_x_htrans_i`, `m_x_hwdata_i`, `m_x_hwrite_i` in,
+  `m_x_hrdata_o`, `m_x_hready_o`, `m_x_hresp_o` out; single-instance
+  widths (32, `HAUSER_W`, 3, 1, 4, 3, 2, 32, 1 / 32, 1, 1). No
+  request/grant: the executable side is arbitrated internally.
+- **`m_nx_*`** — `NR_M` non-executable managers, the generic `m_*`
+  group renamed, including `m_nx_hmaster_i` (qualified by
+  `M_NX_HMASTER_TAG`) and `m_nx_request_o` / `m_nx_grant_i` for the
+  external arbiter. The executable manager has no HMASTER input.
 
-| Direction | Port              | Width        | Description                                     |
-|-----------|-------------------|--------------|-------------------------------------------------|
-| in        | `m_x_haddr_i`     | 32           | Executable-side APH address                     |
-| in        | `m_x_hauser_i`    | `HAUSER_W`   | Executable-side HAUSER sideband                 |
-| in        | `m_x_hburst_i`    | 3            | Executable-side burst type                      |
-| in        | `m_x_hmastlock_i` | 1            | Executable-side locked transfer indicator       |
-| in        | `m_x_hprot_i`     | 4            | Executable-side protection control              |
-| in        | `m_x_hsize_i`     | 3            | Executable-side transfer size                   |
-| in        | `m_x_htrans_i`    | 2            | Executable-side transfer type                   |
-| in        | `m_x_hwdata_i`    | 32           | Executable-side write data                      |
-| in        | `m_x_hwrite_i`    | 1            | Executable-side write enable                    |
-| out       | `m_x_hrdata_o`    | 32           | Executable-side read data                       |
-| out       | `m_x_hready_o`    | 1            | Executable-side ready (stalls `m_x` while its APH waits inside the fabric) |
-| out       | `m_x_hresp_o`     | 1            | Executable-side response                        |
+> **The executable manager's writes are NOT filtered on hiperf.** `m_x_hwrite_i`
+> is forwarded to the executable subordinates unchanged, so a write presented by
+> `m_x` reaches whichever subordinate decodes — it is the subordinate's job to
+> refuse it. Only the **fused** variant diverts an `m_x` write to a default
+> subordinate and answers ERROR; do not carry that expectation across.
 
-**Non-executable managers** (`NR_M` of them — same shape as the generic
-fabric's `m_*` group, just renamed `m_nx_*`):
+> **HMASTER IDs are not manager indices here.** `4'h0` is reserved for the
+> executable manager, so by default non-executable manager *i* is reported as
+> **`i+1`** on `s_nx_hmaster_o`. A subordinate implementing the per-master policy
+> this document delegates to it (see *Architectural constraints*) must decode the
+> ID the fabric was built with (`i+1`, or `M_NX_HMASTER_ID`), not the manager
+> index; comparing against the index would apply the policy to the wrong
+> master. This also caps `NR_M` at 15 rather than 16. The fused fabric inherits
+> the same scheme.
 
-| Direction | Port               | Width                   |
-|-----------|--------------------|-------------------------|
-| in        | `m_nx_haddr_i`     | `32*NR_M`               |
-| in        | `m_nx_hauser_i`    | `HAUSER_W*NR_M`         |
-| in        | `m_nx_hburst_i`    | `3*NR_M`                |
-| in        | `m_nx_hmastlock_i` | `NR_M`                  |
-| in        | `m_nx_hprot_i`     | `4*NR_M`                |
-| in        | `m_nx_hsize_i`     | `3*NR_M`                |
-| in        | `m_nx_htrans_i`    | `2*NR_M`                |
-| in        | `m_nx_hwdata_i`    | `32*NR_M`               |
-| in        | `m_nx_hwrite_i`    | `NR_M`                  |
-| out       | `m_nx_hrdata_o`    | `32*NR_M`               |
-| out       | `m_nx_hready_o`    | `NR_M`                  |
-| out       | `m_nx_hresp_o`     | `NR_M`                  |
-| out       | `m_nx_request_o`   | `NR_M`                  |
-| in        | `m_nx_grant_i`     | `NR_M`                  |
+Two decoders are needed, one over the whole address space and one over
+the executable subset. **Both must decode the same address ranges for the
+executable subordinates**: `s_decoder_1hot_i[i]` and `s_x_decoder_1hot_i[i]`
+select the same subordinate through different paths, so a range mismatch sends
+a fetch and a data access at the same address to different memories, silently.
+The executable bits of `s_decoder_1hot_i` are the low `NR_S_X` bits, in the
+same order as `s_x_decoder_1hot_i`.
 
-**Decoders** — one decoder over the full address space (covering
-**both** X and NX slaves), one extra decoder over the executable
-sub-set only:
+The decoder ports:
 
-| Direction | Port                  | Width    | Description                                                   |
-|-----------|-----------------------|----------|---------------------------------------------------------------|
-| in        | `s_decoder_1hot_i`    | `NR_S`   | One-hot select over ALL slaves (`NR_S = NR_S_X + NR_S_NX`)    |
-| out       | `s_decoder_addr_o`    | 32       | Address feeding the full-system decoder                       |
-| in        | `s_x_decoder_1hot_i`  | `NR_S_X` | One-hot select over executable slaves only                    |
-| out       | `s_x_decoder_addr_o`  | 32       | Address feeding the executable-sub-set decoder                |
+| Direction | Port                  | Width    | Description |
+|-----------|-----------------------|----------|-------------|
+| out       | `s_decoder_addr_o`    | 32       | Address for the system decoder |
+| in        | `s_decoder_1hot_i`    | `NR_S_X + NR_S_NX` | One-hot select over all subordinates, executable ones on the low bits |
+| out       | `s_x_decoder_addr_o`  | 32       | Address for the executable-side decoder |
+| in        | `s_x_decoder_1hot_i`  | `NR_S_X` | One-hot select over the executable subordinates |
 
-**Executable subordinates** (`s_x_*`, `NR_S_X` slaves) and
-**non-executable subordinates** (`s_nx_*`, `NR_S_NX` slaves) share the
-same per-port shape as the generic fabric's `s_*` group, just split
-into two bundles sized by `NR_S_X` and `NR_S_NX` respectively.
+The subordinate side is the generic `s_*` group split in two bundles,
+`s_x_*` sized by `NR_S_X` and `s_nx_*` sized by `NR_S_NX`.
 
-> **Internal X-side arbitration.** Each executable subordinate is
-> fronted by two internal `ahb_manager_if` instances + an
-> `ahb_arbiter_2m` (one channel from `m_x`, one from the NX-side mux
-> for an NX-master access into the X region). The integrator does
-> **not** wire a second external arbiter — the X-side arbitration is
-> fully internal.
+### Fused
 
-### Fused ports
+Same manager and decoder ports as hiperf. The `s_nx_*` bundle is
+unchanged; the `s_x_*` bundle is replaced by memory-macro pins:
 
-Same X / NX manager + decoder layout as hiperf, but the executable
-subordinate AHB ports are **replaced by direct memory-macro pins**:
+| Direction | Port          | Width              | Description |
+|-----------|---------------|--------------------|-------------|
+| in        | `rom_dout_i`  | `32*NR_S_X_ROM`    | ROM read data |
+| out       | `rom_addr_o`  | `30*NR_S_X_ROM`    | ROM word address; slice to the macro depth |
+| out       | `rom_cen_o`   | `NR_S_X_ROM`       | ROM chip enable, active low |
+| out       | `rom_clk_o`   | `NR_S_X_ROM`       | ROM clock (`hclk_i`, not gated) |
+| in        | `sram_dout_i` | `32*NR_S_X_SRAM`   | SRAM read data |
+| out       | `sram_addr_o` | `30*NR_S_X_SRAM`   | SRAM word address; slice to the macro depth |
+| out       | `sram_cen_o`  | `NR_S_X_SRAM`      | SRAM chip enable, active low |
+| out       | `sram_clk_o`  | `NR_S_X_SRAM`      | SRAM clock (`hclk_i`, not gated) |
+| out       | `sram_din_o`  | `32*NR_S_X_SRAM`   | SRAM write data |
+| out       | `sram_wen_o`  | `4*NR_S_X_SRAM`    | SRAM byte write enables, active low |
 
-| Direction | Port                                            | Width                                | Description                                            |
-|-----------|-------------------------------------------------|--------------------------------------|--------------------------------------------------------|
-| in        | `rom_dout_i`                                    | `32*NR_S_X_ROM`                      | ROM macros' read data (one per fused ROM controller)   |
-| out       | `rom_addr_o`                                    | `30*NR_S_X_ROM`                      | ROM macros' word addresses                             |
-| out       | `rom_cen_o`                                     | `NR_S_X_ROM`                         | ROM macros' chip-enable (active-low)                   |
-| out       | `rom_clk_o`                                     | `NR_S_X_ROM`                         | ROM macros' clock (gated `hclk_i`)                     |
-| in        | `sram_dout_i`                                   | `32*NR_S_X_SRAM`                     | SRAM macros' read data                                 |
-| out       | `sram_addr_o`                                   | `30*NR_S_X_SRAM`                     | SRAM macros' word addresses                            |
-| out       | `sram_cen_o`                                    | `NR_S_X_SRAM`                        | SRAM macros' chip-enable (active-low)                  |
-| out       | `sram_clk_o`                                    | `NR_S_X_SRAM`                        | SRAM macros' clock (gated `hclk_i`)                    |
-| out       | `sram_din_o`                                    | `32*NR_S_X_SRAM`                     | SRAM macros' write data                                |
-| out       | `sram_wen_o`                                    | `4*NR_S_X_SRAM`                      | SRAM macros' per-byte write enables (active-low)       |
-
-The `s_nx_*` group is unchanged from hiperf. The `s_x_*` AHB group is
-**not exposed** — the fused controllers consume that path internally.
-The `m_x_*` executable-manager group, the `m_nx_*` non-executable
-manager group, the `s_decoder_*` / `s_x_decoder_*` decoder groups, and
-the `s_nx_*` subordinate group are all identical in shape to the hiperf
-variant.
-
-> **Decoder-bit ordering.** `s_x_decoder_1hot_i` is laid out as
-> `{ NR_S_X_SRAM SRAM bits, NR_S_X_ROM ROM bits }` — ROM controllers
-> occupy the low decoder bits, SRAM controllers the high. The
-> integrator's executable-side decoder must match this ordering. See
-> [Address-map requirements](#address-map-requirements).
+With `NR_S_X_ROM = 0` the `rom_*` ports keep a width of one slot:
+`rom_cen_o` is parked high, `rom_clk_o` and `rom_addr_o` are driven
+low, and `rom_dout_i` must be tied off.
 
 ---
 
 ## Integration requirements
 
-- **Reset (`hresetn_i`)** — active-low; assertion style follows
-  `ASYNC_RST_EN` (`1` = asynchronous, default; `0` = synchronous).
-  De-assertion **must be synchronised to `hclk_i`** by the integrator.
-  The IP contains no internal reset synchroniser.
+- **Reset.** `hresetn_i` is active low and asserted asynchronously or
+  synchronously according to `ASYNC_RST_EN`. Its de-assertion must be
+  synchronised to `hclk_i` by the integrator: the fabric has no reset
+  synchroniser.
 
-- **Clock gating (`hclk_en_o` → `hclk_i`)** — `hclk_en_o` is a
-  **combinational** enable that aggregates the per-block enables from
-  all manager-ifs, the subordinate mux, and the default subordinate. It
-  must drive a latch-based ICG cell at the SoC clock root. It asserts
-  whenever there is any AHB activity (pending APH, ongoing DPH, or
-  default-subordinate error response in flight).
+- **Clock gating.** `hclk_en_o` is a combinational enable that is high
+  whenever the fabric has work in flight (a pending or ongoing transfer,
+  a buffered write, an ERROR response). It is meant to drive a
+  latch-based ICG cell at the clock root; the fabric is equally correct
+  on a free-running clock.
 
-- **External arbiter (generic + hiperf NX side)** — the integrator
-  must supply a request-grant arbiter over `m_request_o` /
-  `m_grant_i`. The grant is consumed combinationally by
-  `ahb_manager_mux` — the arbiter therefore needs to settle the grant
-  within the same cycle as the request. A simple round-robin or
-  priority-encoder arbiter suffices; the bundled `bench/verilog/ahb_arbiter.v`
-  model implements one such reference for the testbench.
+- **External arbiter** (generic, and the non-executable side of hiperf
+  and fused). Supply a request/grant arbiter over `m_request_o` /
+  `m_grant_i`. The grant is used combinationally, so it must settle in
+  the same cycle as the request — a registered grant is not supported —
+  and it must be one-hot. The arbiter may park its grant on a default
+  manager while nobody requests: the fabric only acts on a grant while
+  the bus can accept an address phase, so a parked grant never starts
+  a transfer on top of another manager's stalled data phase, and
+  `s_htrans_o` is forced to IDLE whenever no granted address phase is
+  on the bus, so a manager whose grant is parked cannot expose a NONSEQ
+  to a subordinate during another manager's wait state (`s_hsel_o` may
+  still be asserted with IDLE). A simple round-robin or priority arbiter
+  is sufficient; `bench/verilog/ahb_arbiter.v` is a reference.
 
-- **External decoder (generic + hiperf NX side)** — the integrator
-  must supply a one-hot decoder mapping the system address
-  `s_decoder_addr_o` to `s_decoder_1hot_i`. The decoder is purely
-  combinational. An all-zero output triggers the default subordinate
-  ERROR response. For hiperf, a second decoder over the executable
-  address range (`s_x_decoder_1hot_i`) is also required.
+- **External decoder** (same variants). Supply a combinational one-hot
+  decoder from `s_decoder_addr_o` to `s_decoder_1hot_i`. An all-zero
+  output selects the default subordinate of that bus. Hiperf and fused
+  need a second decoder over the executable range, from
+  `s_x_decoder_addr_o` to `s_x_decoder_1hot_i`; bit *i* of it and bit
+  *i* of `s_decoder_1hot_i` must cover the same address range, and on
+  fused the ROM-low / SRAM-high order applies to both (see
+  [Address map](#address-map)).
 
-- **Slave `hready_i` feedback** — the bundled `ahb_subordinate_mux`
-  drives `s_hready_o[NR_S-1:0]` with the global muxed `hreadyout`;
-  the integrator must connect each slave's `hready_i` from the
-  corresponding `s_hready_o` bit. **Do not** independently tie any
-  slave's `hready_i`, or pipelined transfers will desynchronise.
+- **Bursts and locks.** The fabric arbitrates transfer by transfer. A
+  BUSY beat releases the bus, so another manager can be granted between
+  the beats of a burst, and a SEQ beat can follow an unrelated transfer
+  at the subordinate. `hmastlock` is forwarded but not honoured by the
+  bundled arbiters. A manager that needs atomic bursts or locks must not
+  share its bus with other managers, unless the external arbiter
+  implements the hold. No aRVern manager bursts: the core drives
+  `hburst` SINGLE and `hmastlock` deasserted on both of its buses, so
+  this limitation costs an aRVern platform nothing and matters only to
+  a third-party bursting manager.
 
-- **Manager `hsel_i`** — each top-level interconnect ties the embedded
-  `ahb_manager_mux`'s `m_hsel_i` input to `{NR_M{1'b1}}` (every master
-  always selects the fabric). There is no `m_hsel` port on the
-  interconnect's external interface — if the integrator wants per-master
-  select gating, it must drive `m_htrans_i = IDLE` upstream of this IP
-  instead.
+- **Subordinate `hready`.** Connect every subordinate's `hready` input
+  to its bit of `s_hready_o` (or `s_x_hready_o` / `s_nx_hready_o`).
+  Never tie it independently: pipelined transfers would desynchronise.
 
-- **Fused: memory-macro contract** — for the fused variant, the
-  attached ROM and SRAM macros must implement the same synchronous
-  pin-level interface as the bundled `bench/verilog/rom.v` /
-  `bench/verilog/sram.v` models: registered address + write data on the
-  rising edge of `rom_clk_o` / `sram_clk_o` (= `hclk_i`) when
-  `*_cen_o` is asserted (low), with `*_dout_i` returned combinationally
-  one cycle later. The fused controllers expect single-port macros (no
-  separate read/write ports) — internal arbitration takes care of read
-  vs. write contention exactly like the standalone
-  `ahb_sram_controller`.
+- **Manager select.** There is no `m_hsel` port; every manager always
+  selects the fabric. A manager that must not be seen by the fabric
+  drives `htrans = IDLE`.
 
-- **Misaligned accesses** — the fabric **does not** check for misaligned
-  transfers; it assumes the masters and/or the executable subordinates
-  filter them upstream (CPUs raise the alignment exception themselves).
-  The default subordinate is the only path that ever drives `hresp = 1`
-  from inside this IP.
+- **Manager-supplied HMASTER bits.** See
+  [Manager-supplied HMASTER bits](#manager-supplied-hmaster-bits): tie
+  `m_hmaster_i` / `m_nx_hmaster_i` to 0 unless a manager's tag bits are
+  enabled.
+
+- **Fused memory macros.** ROM and SRAM macros must behave like the
+  reference models `bench/verilog/rom.v` and `sram.v`: single-port,
+  address (and write data) sampled on the rising edge of
+  `rom_clk_o` / `sram_clk_o` while `*_cen_o` is low, read data valid
+  during the following cycle, no wait states.
+
+- **Misaligned accesses** are not checked; the fabric expects managers
+  and subordinates to handle them (CPUs raise the alignment exception
+  themselves). Transfer sizes above a word are not checked either: the
+  fused SRAM controller ignores `hsize[2]`, and `hsize[1:0] = 2'b11`
+  produces no byte strobe — the write is accepted with OKAY and dropped,
+  a read returns the word; the fused ROM controller ignores `hsize`
+  altogether on both ports and returns the full word. Inside the fabric,
+  `hresp = 1` comes only from the default subordinates and from the
+  fused ROM controller on a write.
+
+### Manager-supplied HMASTER bits
+
+Each manager's HMASTER is an ID the fabric assigns, ORed with the bits of
+that manager's `m_hmaster_i` enabled by its `M_HMASTER_TAG` nibble
+(`m_nx_hmaster_i` / `M_NX_HMASTER_TAG` on hiperf and fused). This is the
+AMBA model of a manager-generated HMASTER combined with an interconnect
+value: a manager with several sources of traffic tags each transfer, and
+the fabric keeps the result unique across managers. The tag is an
+address-phase signal and follows the transfer through the fabric's
+address-phase caching like `haddr`.
+
+Every value a manager can present, its ID ORed with any subset of its
+tag bits, must be unique. Tag bits must be zero in the manager's own ID,
+two managers must differ in at least one bit that neither of them tags,
+and on hiperf and fused no non-executable manager may use `4'h0`. The
+simulation build stops at elaboration with `$fatal` on a configuration
+that breaks one of these rules; synthesis does not check them.
+
+Both parameters pack one nibble per manager, manager 0 in bits `[3:0]`,
+like the port buses. A worked example on a generic fabric with three
+managers, where manager 1 carries a one-bit tag:
+
+| Configuration | `M_HMASTER_ID` | `M_HMASTER_TAG` | Manager 0 | Manager 1 | Manager 2 |
+|---------------|----------------|-----------------|-----------|-----------|-----------|
+| Default IDs, tag on bit 3 | `12'h000` (IDs 0, 1, 2) | `12'h080` | `4'h0` | `4'h1` or `4'h9` | `4'h2` |
+| Explicit IDs, tag on bit 0 | `12'h420` (IDs 0, 2, 4) | `12'h010` | `4'h0` | `4'h2` or `4'h3` | `4'h4` |
+| Rejected: tag overlaps ID | `12'h000` (IDs 0, 1, 2) | `12'h010` | — | — | — |
+| Rejected: collision | `12'h000` (IDs 0, 1, 2) | `12'h002` | — | — | — |
+
+In the first row, manager 1 presents `4'h9` while its `m_hmaster_i[7]`
+(bit 3 of its nibble) is high, and `4'h1` otherwise. Every other
+`m_hmaster_i` bit is ignored, whatever the managers drive on it. The third
+row enables bit 0 on manager 1, whose ID `4'h1` already has that bit set.
+In the fourth row, manager 0 could present `4'h2`, which is manager 2's
+ID. On hiperf and fused, `M_NX_HMASTER_ID` / `M_NX_HMASTER_TAG` work the
+same way over the non-executable managers, with default IDs `1, 2, …`.
+
+The aRVern core tags Debug Module system-bus (SBA) transfers on its data
+port with `data_hmaster_o`. With the data port on non-executable manager
+0 of a hiperf or fused fabric, one parameter and one connection carry it
+to every subordinate, keeping the default IDs:
+
+```verilog
+ahb_interconnect_hiperf #(.NR_M(1), .M_NX_HMASTER_TAG(4'h8), ...) u_fabric (
+    ...
+    .m_nx_hmaster_i ({data_hmaster_o, 3'b000}),
+    ...
+);
+```
+
+Hart data accesses then arrive as HMASTER `4'h1` and SBA transfers as
+`4'h9`; instruction fetches stay `4'h0`. On the generic fabric with the
+instruction port on manager 0 and the data port on manager 1, the
+equivalent is `M_HMASTER_TAG(8'h80)` with
+`m_hmaster_i({data_hmaster_o, 3'b000, 4'h0})`. The fused controllers
+do not receive HMASTER, so a policy on executable memory still has to be
+enforced upstream (see [Fused fabric](#fused-fabric)).
 
 ---
 
-## Architectural Constraints
+## Architectural constraints
 
-The fabric's protocol-level correctness relies on a small set of architectural constraints
-established at one site and consumed at another. They are listed here so
-that maintainers extending the IP (a new arbiter, a new subordinate, a
-parameter sweep) can verify each one is preserved.
+The fabric's correctness rests on a few properties that are established
+in one place and relied upon in another. They are numbered so that RTL
+comments and this document can refer to them; #1, #3, #5 and #6 are
+part of the integrator's contract, the others are internal invariants
+of interest when extending the IP.
 
-| # | Architectural Constraints | Established at | Consumed at | Failure mode if violated |
-|---|-----------|----------------|-------------|--------------------------|
-| **1** | `grant_o` from any arbiter feeding the fabric is one-hot in every cycle (at most one bit high). | `ahb_arbiter_2m.v` by construction; external arbiters by integrator contract. | `ahb_manager_mux.v` grant-aware MUXes and data-phase OR-combine. | Multi-driver collision on the address-phase bus; silent corruption of the muxed haddr / hprot / hsize / … |
-| **2** | At most one `m_dph_ongoing[i]` is high in any cycle. | (I1) + `m_request_o = (m_aph_valid \| m_aph_pending) & hreadyout_i` in `ahb_manager_if.v:107` — masters do not request during another master's data-phase wait. | OR-combine of `hwdata_int` in `ahb_manager_mux.v` `assign hwdata_o = mux_to_32b(hwdata_int);`. | Silent corruption of `hwdata` from two masters ORing together. |
-| **3** | Subordinates connected to the fabric **must register their `hreadyout`**, i.e. `hreadyout` must not depend combinationally on `hready_i`. | Integrator contract; satisfied by all in-tree subordinates (`ahb_default_subordinate`, `ahb_fused_*_ctrl`, `ahb_rom_controller`, `ahb_sram_controller`). | Closed-loop AHB hready path: `ahb_manager_if.hready_o` → slave → slave `hreadyout` → `hreadyout_i` → `m_hreadyout_o` → loopback `m_hready_i` → `hready_o`. | Combinational loop; synthesis will infer a latch or fail with a feedback error. |
-| **4** | `m_hready_i` of every `ahb_manager_if` instance is wired to the same instance's own `m_hreadyout_o` at the next hierarchy level. | `ahb_interconnect_generic.v`, `_hiperf.v`, `_fused.v` — the same external net is connected to both ports of `ahb_manager_mux`. | `ahb_manager_if.v` uses `m_hready_i` to compute `m_aph_valid` (line 96). No path inside `ahb_manager_if` closes a comb loop. | Decoupling the loopback (e.g. tying `m_hready_i = 1`) would cause the manager to keep re-issuing the same APH after it has been latched into the cache. |
-| **5** | The attached SRAM / ROM macros in the fused variant return read data combinationally one cycle after the read command, with no wait state from the macro. | Memory-macro contract (see *Integration requirements*). | `ahb_fused_sram_ctrl.v` and `ahb_fused_rom_ctrl.v` — `m*_dph_ongoing` flushes unconditionally next cycle; `a_hrdata_o` / `b_hrdata_o` are gated by the 1-cycle DPH window. | Read data dropped; manager reads garbage. |
-| **6** | Reset-style dependent (`ASYNC_RST_EN`): in async mode (`1`, default) `hresetn_i` de-assertion must be synchronised to `hclk_i` before reaching the fabric; in sync mode (`0`) the clock must be running while `hresetn_i` is asserted. | Integrator contract (no internal reset synchroniser). | All FFs use `posedge hclk_i or negedge hresetn_i` when `ASYNC_RST_EN=1`, or `posedge hclk_i` with synchronous reset when `ASYNC_RST_EN=0`. | Async: reset-removal metastability / asymmetric reset across FFs. Sync: flops fail to initialise if the clock is gated during reset. |
+| #     | Constraint | Established by | Relied upon by | If violated |
+|-------|------------|----------------|----------------|-------------|
+| **1** | Every grant fed to the fabric is one-hot in every cycle. | `ahb_arbiter_2m` by construction; external arbiters by contract. | The grant-controlled muxes and the `hwdata` OR-combine in `ahb_manager_mux`. | Two managers drive the address phase at once: silent corruption. |
+| **2** | At most one manager owns a data phase on a bus at any time. | #1, plus `ahb_manager_if` not requesting during another manager's stalled data phase (`m_request_o` is gated by `hreadyout_i`) and #7. Checked every cycle by the testbench on the non-executable / main bus. | The `hwdata` OR-combine and the `hrdata` / `hresp` return gating. | `hwdata` collision; `hrdata` / `hresp` delivered to the wrong manager. |
+| **3** | A subordinate's `hreadyout` and `hresp` are registered: neither depends combinationally on any of its AHB inputs. | Integrator contract; true of every in-tree subordinate. | The `hready` feedback (`s_hready_o`, and `s_x_hready_o = s_x_hreadyout_i` on hiperf) and the request → arbiter → grant → decoder path both close through the subordinate. | Combinational loop. |
+| **4** | Each `ahb_manager_if` receives on `m_hready_i` the combined `hready` of the bus it sits on: its own `m_hreadyout_o` for the external manager ports; the originating sub-fabric's `hready` for the level-2 channels in front of a hiperf executable subordinate (not a self-loopback, which would let a channel commit an address phase while its own bus is stalled). | Top-level wiring of the three variants. | `ahb_manager_if` uses `m_hready_i` to recognise a valid address phase; nothing inside it connects `m_hready_i` to `m_hreadyout_o`. | A manager re-issues an address phase it has already cached, or an access is accepted during a wait state. |
+| **5** | Fused memory macros return read data one cycle after the command, without wait states. | Memory-macro contract. | The fused controllers complete every read data phase one cycle after the command. | Read data lost. |
+| **6** | Reset de-assertion is synchronised to `hclk_i`; with `ASYNC_RST_EN = 0` the clock runs while reset is asserted. | Integrator contract. | Every flop in the fabric. | Asynchronous: reset-removal metastability. Synchronous: flops never reset. |
+| **7** | A grant is acted upon only while the bus can accept an address phase (`m_grant_i & hreadyout_i`), and a subordinate never sees a transfer for a bare grant: `s_htrans_o` is IDLE unless a granted address phase is on the bus, so `s_hsel_o[i]` may be asserted with `s_htrans_o = IDLE`, never with NONSEQ/SEQ. | `ahb_manager_if` (the grant); `ahb_subordinate_mux` (`s_htrans_o` qualified by the granted address phase). | #2 under any same-cycle arbiter, including one that parks its grant on a default manager. | A parked grant starts a second data phase on top of a stalled one, or exposes a withdrawn NONSEQ to a subordinate during another manager's wait state. |
 
 ---
 
 ## Operation
 
-In the waveforms below, manager-0 (`m0`) accesses use yellow, manager-1
-(`m1`) uses orange, and arbitration-pending / wait-state cycles use
-blue.
+In the waveforms, manager 0 is yellow, manager 1 orange, and cycles
+spent waiting for arbitration or in wait states are blue.
 
 ### Single read through the generic fabric
 
-A single non-pipelined read from manager 0 to subordinate 0
-(`htrans = NONSEQ`, `hwrite = 0`, `haddr = 0x10`). The arbiter grants
-M0 in the same cycle as the APH; the subordinate mux routes the APH
-fan-out to slave 0; one cycle later the slave's `s_hrdata_i` reaches
-`m_hrdata_o[m0]` via the data-phase mux.
+Manager 0 reads subordinate 0 (`htrans = NONSEQ`, `haddr = 0x10`). The
+arbiter grants it in the address-phase cycle, the subordinate mux
+selects subordinate 0, and one cycle later the subordinate's read data
+reaches `m_hrdata_o[0]`.
 
 ![Single read (generic)](img/single_read_generic.svg)
 
 ### Arbitrated grant switch
 
-Two managers raise `m_request_o` simultaneously. The external
-round-robin arbiter grants M0 first; M1's APH is captured into its
-`m_aph_pending` cache and replayed on the next cycle when the arbiter
-flips priority. M1's `m_hreadyout_o` is held low while its APH waits —
-the master sees a one-cycle wait state from its own point of view, even
-though the fabric never inserts a wait state on the bus side.
+Both managers request in the same cycle. The round-robin arbiter grants
+manager 0; manager 1's address phase is cached in its `ahb_manager_if`
+and replayed the next cycle. Manager 1 sees one wait state on its own
+`hready` while its address phase waits; the bus itself never idles.
 
 ![Arbitrated grant switch](img/arbiter_grant_switch.svg)
 
 ### Default-subordinate ERROR response
 
-An access to an unmapped address: the integrator's decoder returns
-`s_decoder_1hot_i == 0`, the interconnect routes the APH to the default
-subordinate, which raises a two-cycle ERROR sequence — `hreadyout = 0`
-on the first DPH cycle with `hresp = 1`, then `hreadyout = 1` with
-`hresp = 1` on the second cycle (the master samples `hresp` on the
-second cycle and aborts its burst).
+An access to an unmapped address: the decoder returns all zeros, the
+default subordinate takes the transfer and answers the two-cycle ERROR
+— `hreadyout = 0` with `hresp = 1`, then `hreadyout = 1` with
+`hresp = 1`. The manager samples the error in the second cycle.
 
 ![Default subordinate ERROR response](img/default_error.svg)
 
 ### Hiperf parallel access
 
-The executable manager fetches an instruction from executable
-subordinate 0 (ROM) on the same cycle a non-executable manager reads
-non-executable subordinate 1 (a peripheral). Both transfers traverse
-the fabric independently — peak throughput is **two AHB transfers per
-cycle**. The X-side internal arbiter (`ahb_arbiter_2m`) only kicks in
-when an NX master targets an X subordinate, which is not the case here.
+The executable manager fetches from executable subordinate 0 (ROM)
+while a non-executable manager reads non-executable subordinate 1 (a
+peripheral) in the same cycle. The two transfers do not interact: two
+transfers per cycle. The level-2 channel in front of the ROM only
+arbitrates when a non-executable manager targets the ROM, which is not
+the case here.
 
 ![Hiperf parallel access](img/hiperf_parallel.svg)
 
 ### Fused Port-A vs Port-B contention
 
-Both ports of a fused SRAM controller see an APH in the same cycle:
-Port A from `m_x` (instruction fetch), Port B from an NX master routed
-through the subordinate mux. With the default round-robin arbitration
-(`FIXED_B_PRIO = 0`), the controller's arbiter starts at the
-`ARB_RESET = 2'b01` state (= "Port A priority") so Port A wins the
-first contest; Port B sees `b_hreadyout = 0` for one cycle while its
-APH is held inside the controller, then completes its DPH one cycle
-after Port A. Subsequent collisions alternate winners (toggle priority).
+Both ports of a fused SRAM controller present an address phase in the
+same cycle: Port A from the executable manager, Port B from a
+non-executable manager. With `FIXED_B_PRIO = 0` the priority flop
+resets to "Port A first", so Port A is served and Port B is held for one
+cycle; later contests go to the port that lost the previous one (the
+SRAM controller's priority bit also advances on uncontested grants, so
+the winner is not a strict alternation).
 
 ![Fused Port-A/B contention](img/fused_contention.svg)
 
@@ -594,26 +679,24 @@ after Port A. Subsequent collisions alternate winners (toggle priority).
 
 ## Lint waivers
 
-Same `_unused` postfix convention as the rest of the aRVern IP family —
-unused upper bits of architectural-maximum vectors (e.g. the
-`m_hmaster` constant table sized for 16 masters but driving only
-`NR_M` ports) and unused write-side signals into the default
-subordinate end in `_unused`. See
-[`arv_custom_csr.md`](../../arv_custom_csr/doc/arv_custom_csr.md#lint-waivers)
-for the per-tool waiver recipes.
-
-The repository ships fabric-specific Verilator waiver files alongside
-the run scripts:
+Signals that are intentionally unused end in `_unused`, as in the rest
+of the aRVern IPs — for instance the default subordinate's `hmaster`
+output, which nothing consumes. The Verilator
+waiver files, one per variant, live next to the run scripts:
 
 ```
-sim/rtl_sim/run/
-├── waivers_generic.vlt
-├── waivers_hiperf.vlt
-└── waivers_fused.vlt
+sim/rtl_sim/run/waivers_generic.vlt
+sim/rtl_sim/run/waivers_hiperf.vlt
+sim/rtl_sim/run/waivers_fused.vlt
 ```
 
-These are consumed automatically by `run_lint` (one lint pass per
-fabric variant).
+`run_lint` applies them automatically; its parameter sweep is the list
+inside the script (every top at `NR_M = 1` and at its maximum, plus the
+ROM-less fused fabric). VC Static waivers are under `lint/vc_static/`;
+that flow (`run_vclint`, see its README) sweeps the seven configurations
+of `sim/rtl_sim/bin/rtl_configs.py` — `generic` / `hiperf` / `fused` each
+at its defaults and with synchronous reset, plus `fused_norom`
+(`NR_S_X_ROM = 0`).
 
 ---
 
@@ -621,194 +704,308 @@ fabric variant).
 
 ```
 ahb_interconnect/
+├── ahb_interconnect.core            FuseSoC manifest (one target per variant)
 ├── rtl/verilog/
-│   ├── ahb_interconnect_generic.v   Top-level: generic fabric
-│   ├── ahb_interconnect_hiperf.v    Top-level: high-performance fabric
-│   ├── ahb_interconnect_fused.v     Top-level: fused fabric
-│   ├── ahb_manager_if.v             Per-master front-end (APH cache, request/grant)
-│   ├── ahb_manager_mux.v            Manager-side mux (NR_M × manager_if + grant mux)
-│   ├── ahb_subordinate_mux.v        Subordinate-side fan-out + one-hot return mux
-│   ├── ahb_default_subordinate.v    Unmapped-access ERROR responder
-│   ├── ahb_arbiter_2m.v             2-manager round-robin (used by hiperf X side + fused)
-│   ├── ahb_fused_rom_ctrl.v         Dual-port ROM controller (fused variant only)
-│   ├── ahb_fused_sram_ctrl.v        Dual-port SRAM controller (fused variant only)
-│   └── filelist.f                   RTL source list (consumed by sim & synth)
+│   ├── ahb_interconnect_generic.v   Top level, generic fabric
+│   ├── ahb_interconnect_hiperf.v    Top level, high-performance fabric
+│   ├── ahb_interconnect_fused.v     Top level, fused fabric
+│   ├── ahb_manager_if.v             Per-manager front end
+│   ├── ahb_manager_mux.v            Manager-side mux
+│   ├── ahb_subordinate_mux.v        Subordinate-side fan-out and return mux
+│   ├── ahb_default_subordinate.v    ERROR responder for unmapped addresses
+│   ├── ahb_arbiter_2m.v             Two-manager arbiter (hiperf executable side)
+│   ├── ahb_fused_rom_ctrl.v         Dual-port ROM controller (fused)
+│   ├── ahb_fused_sram_ctrl.v        Dual-port SRAM controller (fused)
+│   └── filelist.f                   RTL file list for simulation and synthesis
 ├── bench/verilog/
-│   ├── tb_ahb_interconnect.v        Top-level testbench (generic + hiperf + fused)
-│   ├── tb_ahb_fused_rom_ctrl.v      Unit testbench for the fused ROM controller
-│   ├── tb_ahb_fused_sram_ctrl.v     Unit testbench for the fused SRAM controller
-│   ├── ahb_arbiter.v                Reference external arbiter for the TB
-│   ├── ahb_decoder.v                Reference external decoder for the TB
-│   ├── ahb_waitstate_inserter.v     Optional random wait-state injector (slave-side)
-│   ├── ahb_tasks*.v                 Reusable AHB read/write tasks (per-master variants)
-│   ├── mem_strobes.v                Strobe / event helpers
-│   ├── rom.v, sram.v                Reference memory macros for the fused variant
-│   └── timescale.v
+│   ├── tb_ahb_interconnect.v        Fabric testbench, all three variants
+│   ├── tb_ahb_fused_rom_ctrl.v      Unit testbench, fused ROM controller
+│   ├── tb_ahb_fused_sram_ctrl.v     Unit testbench, fused SRAM controller
+│   ├── tb_ahb_default_subordinate.v Unit testbench, default subordinate
+│   ├── submit*.f                    File lists for the testbenches
+│   ├── ahb_arbiter.v, ahb_decoder.v Reference external arbiter and decoder
+│   ├── ahb_waitstate_inserter.v     Subordinate-side wait-state injector
+│   ├── ahb_protocol_checker.v       Address-phase stability monitor (HADDR/HTRANS/HSIZE/HWRITE/HBURST held across wait states), one per manager port
+│   ├── ahb_tasks*.v                 AHB read/write tasks, one file per bench manager
+│   ├── rom.v, sram.v                Reference memory macros
+│   └── mem_strobes.v, timescale.v
 ├── sim/rtl_sim/
-│   ├── src/                         Per-test stimulus files + submit.f variants
-│   ├── run/                         Run wrappers (run_all, run_lint, run_fused_*)
-│   └── bin/                         Sim runner + log parsers
+│   ├── src/                         One stimulus file per test
+│   ├── run/                         run, run_all, run_lint, run_fused_*, run_default_subordinate, waivers
+│   └── bin/                         runsim, rtl_configs.py (parameter configurations), gen_rtl_params.py,
+│                                    flatten_filelist.py, parse_results, parse_summaries, vcd_window.py
+├── lint/vc_static/                  VC Static lint flow: run_vclint, rules.tcl, waivers.tcl (see its README)
 ├── synthesis/synopsys/
-│   ├── synthesis.tcl                Top-level Design Compiler flow
-│   ├── library.tcl                  Tech-library selection via LIB_FLAVOR
-│   ├── read.tcl
-│   ├── constraints.tcl              Top-level constraints (clock, path groups)
-│   ├── constraints_ports.generic.tcl Boundary I/O delays for the generic fabric
-│   ├── constraints_ports.hiperf.tcl  Boundary I/O delays for the hiperf fabric
-│   ├── constraints_ports.fused.tcl   Boundary I/O delays for the fused fabric (ROM/SRAM macro pins + AHB)
-│   ├── run_syn, run_syn_d           Synthesis launchers (host / dockerised)
-│   ├── run_syn_generic              Wrapper: pin DESIGN_NAME to the generic top
-│   ├── run_syn_hiperf               Wrapper: pin DESIGN_NAME to the hiperf top
-│   └── libraries/                   setup_*.tcl per technology + .db symlinks
+│   ├── synthesis.tcl                Design Compiler flow
+│   ├── read.tcl, library.tcl        RTL and technology-library setup
+│   ├── constraints.tcl              Clock and path-group constraints
+│   ├── constraints_ports.*.tcl      Boundary I/O delays, one per variant
+│   ├── run_syn, run_syn_generic, run_syn_hiperf
+│   ├── extract_worst_path.py        Worst-path summary printed after each run
+│   ├── run_check_reset_style, check_reset_style_pt.tcl
+│   │                                PrimeTime pass classifying every netlist flop's reset style
+│   └── libraries/                   Technology setups: setup_lib_example.tcl is the template
 └── doc/
     ├── ahb_interconnect.md          This document
-    └── img/                         Block diagrams (PNG) + WaveDrom sources + SVG
+    └── img/                         Block diagrams and waveforms; render.py rebuilds the SVGs from the .json sources
 ```
 
 ---
 
 ## Verification
 
-The verification flow uses **Verilator** for linting and **Icarus
-Verilog** (default) for simulation. The testbench
-`bench/verilog/tb_ahb_interconnect.v` is **shared across all three
-fabric variants**: `+define+GENERIC` / `+define+HIPERF` /
-`+define+FUSED` selects which fabric is instantiated, and
-`+define+RANDOM_WS` injects random wait states from the slave side via
-`ahb_waitstate_inserter` (see below).
+Simulation uses Icarus Verilog; lint uses Verilator (and VC Static,
+see `lint/vc_static/README.md`). One testbench,
+`bench/verilog/tb_ahb_interconnect.v`, serves all three variants; the
+variant, the wait-state injection and the arbiter model are selected by
+`runsim` flags. Three unit benches cover the default subordinate and the
+two fused controllers on their own.
 
-### Wait-state injector
+### Bench structure
 
-![Wait-state inserter — internal timing](img/dv_wait_state_inserter.png)
+**Managers.** The bench drives three managers, M0 to M2, through the
+tasks in `ahb_tasks_m{0,1,2}.v`. On the generic fabric they are the
+three symmetric `m_*` slots. On hiperf and fused, M0 is the executable
+manager `m_x` and M1 / M2 are `m_nx[0]` / `m_nx[1]`; because Port A is
+read-only on fused, `simple_rdwr` and `pipelined_rdwr` run M1 and M2
+only there, and M0 only ever reads. Each manager carries a distinct `hprot` (`4'h2`,
+`4'h3`, `4'hA`) with the same privilege bits, so a mis-routed sideband
+is visible without changing the access mode the peripherals see.
 
-`bench/verilog/ahb_waitstate_inserter.v` is a transparent AHB
-pass-through module that can optionally hold `hreadyout=0` for `N`
-cycles after each address phase, simulating a slow slave. The diagram
-above traces the inserter's internal state during back-to-back transfers:
-`aph_wait_cnt` / `aph_wait_nxt` track the current and queued wait counts,
-and the derived `aph_transparent` / `aph_buffer_sel` / `dph_transparent`
-selectors gate the AHB-side fan-out so the subordinate sees a delayed
-copy of the interconnect-side APH. The TB
-instantiates one inserter **between the fabric output and each
-subordinate** (`ahb_waitstate_inserter_rom_inst`,
-`*_sram_inst`, `*_periph0_inst`, `*_periph1_inst`, …), guarded by
-`` `ifdef RANDOM_WS ``:
+**Parameter point.** One per variant: generic `NR_M = 3`, `NR_S = 4`;
+hiperf `NR_M = 2`, `NR_S_X = 2`, `NR_S_NX = 2`; fused one ROM and one
+SRAM controller, `NR_S_NX = 2`. Other values are elaborated by the lint
+sweeps only.
 
-- Default (no `RANDOM_WS`): every inserter is configured with
-  `number_wait_state = 0` and `random_wait_state_enable = 0` —
-  fully transparent, zero overhead.
-- With `+define+RANDOM_WS`: every inserter gets
-  `number_wait_state = 5` and `random_wait_state_enable = 1` — each
-  APH on that subordinate triggers a fresh `$urandom_range(0, 6)`
-  wait count, so the slave's DPH is held off for 0..5 cycles.
+**Address map** (`bench/verilog/ahb_decoder.v`):
 
-This stresses the fabric's manager-side DPH tracking (the
-`m_dph_ongoing` register in `ahb_manager_if`) and the global `hready`
-broadcast path — and, on the fused variant, the dual-port arbiter's
-behavior when the memory macro takes wait states.
+| Subordinate | Range | Model |
+|-------------|-------|-------|
+| s0 | `0x0040_0000`, 2 KB | ROM — `ahb_rom_controller` + `rom.v` (generic, hiperf); the fused ROM controller's macro pins + `rom.v` (fused) |
+| s1 | `0x0040_1000`, 2 KB | SRAM — `ahb_sram_controller` + `sram.v` (generic, hiperf); the fused SRAM controller's macro pins + `sram.v` (fused) |
+| s2 | `0x0040_2000`, 128 B | `ahb_periph_example` (privilege-filtering, `hsmode` from `hauser[0]`) |
+| s3 | `0x0040_3000`, 128 B | `ahb_periph_example` |
+| — | anything else | default subordinate |
 
-The `-random_ws` flag on `runsim` translates to `+define+RANDOM_WS` at
-compile. Every test in `run_all` is invoked **twice**: once without
-wait states (16 tests) and once with `-random_ws` (16 tests).
+On hiperf and fused, s0 / s1 are the executable subordinates and s2 / s3
+the non-executable ones. The same `ahb_decoder` instance feeds both
+hiperf decoders (`s_x_decoder_1hot = s_decoder_1hot[1:0]`), so the
+bench cannot express a decoder mismatch.
+
+**Arbiter.** `bench/verilog/ahb_arbiter.v` is a rotating-priority
+request/grant arbiter; with `-arb_parked` it parks its grant on M0 while
+nobody requests, which is how Constraint #7 is exercised.
+
+**Wait-state injection.**
+
+![Wait-state inserter](img/dv_wait_state_inserter.png)
+
+`bench/verilog/ahb_waitstate_inserter.v` sits between the fabric and
+each AHB subordinate port and holds `hreadyout` low for a random 0 to 6
+cycles after each address phase, so the fabric's data-phase tracking
+and `hready` feedback are exercised with a slow subordinate on every
+AHB port. On the fused variant that is the two peripherals: the
+executable memories hang off the macro pins and cannot wait
+(Constraint #5). The inserter is transparent unless `-random_ws` is
+given.
+
+The inserter also plays the subordinate's part in the `hready`
+handshake: it keeps its address-phase register clocked by `hready` like
+the reference AHB-Lite subordinate, so a fabric that mishandles `hready`
+corrupts the data it returns and the data checks fail.
+
+### Monitors
+
+Five passive monitors run in every fabric simulation; their violations
+count as test errors.
+
+| Monitor | Checks | Where |
+|---------|--------|-------|
+| Subordinate `hready` (inside `ahb_waitstate_inserter`) | While the subordinate stalls, the fabric hands it `hready = 0`. | Every inserter, i.e. every AHB subordinate port (the two peripherals on fused). |
+| Data-phase ownership | At most one `ahb_manager_if` has a data phase in flight on a bus (Constraint #2). | The generic bus, the non-executable bus of hiperf and fused, and on hiperf each executable subordinate's two-channel bus (executable manager vs non-executable sub-fabric). |
+| `ahb_protocol_checker` | Address-phase stability: `haddr` / `htrans` / `hsize` / `hwrite` / `hburst` are held while `hready = 0` and the response is not ERROR. | One per bench manager port (M0–M2). The subordinate ports are not monitored. |
+| HMASTER | At every address-phase commit (`hsel & hready & htrans[1]`) the `hmaster` a subordinate sees is that of the granted manager, including its tag. The bench tags manager M1 (`M_HMASTER_TAG` / `M_NX_HMASTER_TAG` bit 3, driven from its `haddr[2]`, so the tag toggles between word transfers), and every manager drives ones on its untagged bits. | Strict on every generic subordinate and on the non-executable side of hiperf and fused; range-only (any of 0, 1, 2, 9) on hiperf's executable ports; not observable on fused's executable side. |
+| HAUSER / HPROT | At the same instant, the sideband pair a subordinate sees is that of the granted manager. | Strict where the HMASTER check is strict; on hiperf's executable ports the pair must belong to some manager; not observable on fused's executable side. |
+
+Each `ahb_waitstate_inserter` also carries an ERROR-injection hook, off by
+default: a test raises its `err_req` and the next NONSEQ / SEQ reaching
+that port is answered with the two-cycle ERROR without reaching the
+subordinate (`subordinate_error`).
+
+### What is not covered
+
+- **Atomic bursts and locks.** `burst_lock_forwarding` drives every
+  `hburst` value, `hmastlock` and SEQ / BUSY beats, and checks they are
+  forwarded and answered as documented. Nothing checks an atomic burst or
+  a locked sequence, because the bundled arbiters do not provide one (see
+  *Bursts and locks* under
+  [Integration requirements](#integration-requirements)).
+- **`NR_S_X_ROM = 0` and `NR_S_X_SRAM = 2`.** The bench hard-codes one
+  ROM and one SRAM controller. The ROM-less build is elaborated by the
+  lint sweeps only; two SRAM controllers are never built. Accepted: the
+  bench's memory models are single, named instances and the failure
+  mode of a mis-sliced pin vector would be tests passing against the
+  wrong memory, so the cost of covering it is out of proportion to the
+  branch.
+- **Two managers writing the same SRAM word.** `arbiter_stress` gives
+  each manager its own SRAM window, so every read has one writer and an
+  exact expected value; a cross-manager race on one word is never
+  checked. AHB defines no ordering between managers, so there is
+  nothing for the fabric to get right there.
+- **Hiperf executable-side HMASTER / sideband** is range-only: the value
+  must belong to some manager, not necessarily the granted one. The
+  same `ahb_manager_if` path is checked strictly on the non-executable
+  side. On fused the executable-side controllers do not receive these
+  signals at all, so there is nothing to observe (see
+  [Fused fabric](#fused-fabric)).
+- **The parking arbiter** is run on the generic fabric only; the
+  hiperf / fused non-executable side shares the same `ahb_manager_if`
+  code path.
 
 ### Lint
 
 ```bash
 cd sim/rtl_sim/run
-./run_lint        # runs Verilator over all 3 fabrics (generic / hiperf / fused)
+./run_lint        # Verilator on the three variants, then a parameter sweep:
+                  # every top at NR_M = 1 and at its maximum, and the ROM-less fused fabric
 ```
 
-### Run a single test
+### Simulation
 
 ```bash
 cd sim/rtl_sim/run
-../bin/runsim simple_rdwr                       # default: generic fabric
+../bin/runsim simple_rdwr                       # generic fabric
 ../bin/runsim pipelined_advanced -hiperf        # hiperf fabric
-../bin/runsim fused_arbiter      -fused         # fused fabric (round-robin)
-../bin/runsim fused_arbiter      -fused -fixed_b_prio
-                                                # fused fabric (fixed Port-B priority)
+../bin/runsim fused_arbiter -fused              # fused fabric, round-robin arbitration
+../bin/runsim fused_arbiter -fused -fixed_b_prio
+../bin/runsim arbiter_stress -random_ws         # with wait states
+../bin/runsim arbiter_stress -arb_parked        # bench arbiter parks its grant on manager 0
+../bin/runsim simple_rdwr -seed 12345           # replay a seed
+
+./run_all                                       # full regression, 113 runs
+./run_all 5                                     # five iterations, different seeds
+./run_default_subordinate                       # unit bench, default subordinate
+./run_fused_rom [rr|fixb]                       # unit bench, fused ROM controller
+./run_fused_sram [rr|fixb] [-seed N]            # unit bench, fused SRAM controller
 ```
 
-### Run the full regression
+A run passes when its log ends with `SIMULATION PASSED`; `run_all`
+collects the results and a replay command per test under `log/`.
 
-```bash
-cd sim/rtl_sim/run
-./run_all                                       # 32 tests, one iteration (~18 s)
-./run_all 5                                     # 5 iterations (different seeds)
-./run_fused_rom                                 # unit TB for ahb_fused_rom_ctrl  (round-robin + fixed Port-B)
-./run_fused_sram                                # unit TB for ahb_fused_sram_ctrl (round-robin + fixed Port-B)
-```
+`run_all` performs 113 runs: 108 fabric runs and the five unit-bench
+passes. The fabric runs cover most tests with and without wait states
+(`addr_walk`, `addr_walk_contended`, `default_subordinate_stress`,
+`fused_write_commit`, `fused_x_write`, `hprot_sweep` and `subordinate_error`
+without), the generic arbitration tests also with the parking arbiter,
+the fused tests (`fused_x_write` excepted) also with `FIXED_B_PRIO = 1`,
+and a subset of each variant with synchronous reset (`ASYNC_RST_EN = 0`).
+`./run_all -cov` runs the same list under Verilator for line / branch /
+toggle coverage (`sim/rtl_sim/run/cov/`, waivers in `waivers_cov.md`).
 
 ### Test suite
 
-| Test                | Coverage |
-|---------------------|----------|
-| `simple_rdwr`       | Non-pipelined word/half-word/byte reads + writes; verifies basic 2-phase pipeline and `hsize`-derived byte enables. Runs against all 3 fabrics. |
-| `pipelined_rdwr`    | Back-to-back NONSEQ reads (peak throughput) and back-to-back writes; verifies the AHB pipeline correctly hands data one cycle after each APH. Runs against all 3 fabrics. |
-| `pipelined_advanced`| Stresses APH-cache replay paths in `ahb_manager_if` and the read-after-write handling in the (fused) SRAM controller. Runs against all 3 fabrics. |
-| `simple_arbiter`    | Two-manager contention through the external arbiter: M0 / M1 ping-pong; verifies fair grant rotation and the cached-APH replay in `ahb_manager_if`. *Generic fabric only.* |
-| `hiperf_arbiter`    | Two-manager contention on the executable side of the hiperf fabric: covers the internal `ahb_arbiter_2m` per executable subordinate. *Hiperf fabric only.* |
-| `fused_arbiter`     | Port-A vs Port-B contention on the fused ROM/SRAM controllers; covers both round-robin and fixed-Port-B-priority arbitration via `-fixed_b_prio`. *Fused fabric only.* |
+| Test                          | Covers |
+|-------------------------------|--------|
+| `simple_rdwr`                 | Non-pipelined byte / halfword / word reads and writes; byte enables. All variants. |
+| `pipelined_rdwr`              | Back-to-back reads and writes at one transfer per cycle. All variants. |
+| `pipelined_advanced`          | Pipelined single-manager reads and writes across every subordinate, including a same-word read-after-write on the SRAM (fused: through the SRAM controller's forwarding path). One manager at a time, so no contention. All variants; also run under the parking arbiter and random wait states. |
+| `simple_arbiter`              | Three managers contending through the external arbiter, first spaced, then pipelined. Generic. |
+| `hiperf_arbiter`              | Executable and non-executable managers contending for an executable subordinate through its level-2 channel. Hiperf. |
+| `fused_arbiter`               | Port A versus Port B contention on the fused controllers under the arbitration scheme of the build (`run_all` runs it with and without `-fixed_b_prio`), including a back-to-back phase where Port A streams SRAM reads against two managers streaming SRAM writes, with Port-A data checked, and a directed first-contest check of the winner. Fused. |
+| `fused_write_commit`          | A data write to executable SRAM under a continuous fetch stream reaches the macro within a bounded number of cycles and later fetches read it. Fused, both arbitration schemes. |
+| `fused_x_write`               | A write from the executable manager is answered with ERROR and leaves the memory untouched. Fused. |
+| `arbiter_stress`              | Randomised traffic from all managers, 60 transfers each with random gaps. Every ROM and SRAM read is checked inline: the SRAM is split into per-manager windows (M1, M2 read back their own writes, half the time the word just written; M0 reads a preloaded window), all contending for the same controller. All variants. |
+| `default_subordinate_stress`  | Unmapped addresses, back-to-back and interleaved with mapped ones, from one and from all managers. All variants. |
+| `sideband_hsmode`             | `hauser` (hsmode) toggling per transfer under contention, matched to each committed transfer; a real subordinate refusing a Supervisor access with a two-cycle ERROR while another manager's transfer lands in the second ERROR cycle; odd `hsize` / `hprot` to an unmapped address. All variants. |
+| `size_align_contest`          | Byte / halfword / word accesses at every offset while managers contend, so transfers are replayed after a delayed grant; lane-by-lane checks and a shadow model. Fused: Port-B sub-word writes losing to Port-A reads (buffered writes). All variants; also with the parking arbiter. |
+| `hiperf_arb_contests`         | Directed contests on an executable subordinate: first collision after reset, lone grants moving the priority, repeated collisions. Hiperf. |
+| `fused_rom_contest`           | ROM Port-A / Port-B contention at fabric level, both arbitration schemes, and ROM writes answered ERROR while Port-A reads continue. Fused. |
+| `midrun_reset`                | Reset asserted during a stalled data phase, with a cached address phase, a buffered fused write and the first ERROR cycle; the bus comes out idle and every manager recovers. All variants, both reset styles. |
+| `xdflt_pipeline`              | A pipelined `m_x` sequence through the executable side: writes, reads, unmapped and out-of-decoder accesses, while the other managers stream traffic. Hiperf, fused. |
+| `addr_walk`                   | Walking-ones and walking-zeros unmapped addresses (bits 2..31) and write data, read and write, from every manager; each access must get exactly one ERROR response. All three variants. |
+| `addr_walk_contended`         | The `addr_walk` addresses from the three managers at once, pipelined, so walking address phases are cached and replayed; interleaved in-window walks of bits 2..10 (SRAM write / read back, ROM reads) prove the replayed addresses by their data. Per manager: completions in issue order, exactly one ERROR per unmapped access. All three variants. |
+| `burst_lock_forwarding`       | Every `hburst` value, `hmastlock` high and low, NONSEQ + SEQ beats with BUSY beats between them (and an INCR ending on BUSY), from all managers at once, to ROM, SRAM, the peripherals, the default subordinate of every bus and, on fused, both ports of the ROM / SRAM controllers (M0 writes diverted, ROM writes ERROR per beat). Every committed beat carries the issuing manager's `haddr` / `htrans` / `hburst` / `hmastlock` / `hprot` / `hauser` / `hsize` / `hwrite`; BUSY and IDLE get a zero-wait OKAY; beats of different managers interleave; data checked per beat. All variants, with and without wait states. |
+| `hprot_sweep`                 | All 16 `hprot` values × `hsmode` 0 / 1 from every manager, concurrently: forwarded unchanged to every observable subordinate port (checked per commit), data correct; then against Machine-only peripherals, whose ERROR / OKAY shows the privilege pair they received. All three variants. |
+| `subordinate_error`           | A two-cycle ERROR from every subordinate port (bench error-injection hook in the wait-state inserter) to every manager that reaches it, on reads and writes, plus ROM-controller write ERRORs; the manager's next transfers held through the ERROR and taken afterwards in order; another manager's transfer committed in the second ERROR cycle (generic, non-executable side). All three variants. |
 
-Each test is also run under `-random_ws` (slave-side wait-state
-injection) so the manager-side data-phase tracking is exercised under
-non-trivial DPH timing. Total regression count: **32 tests**
-(`run_all`).
+### Unit benches
 
-A test passes when its log contains `SIMULATION PASSED`; aggregated
-results land in `log/<iter>/summary.<iter>.log`, with a replay command
-(`runsim -seed <N> …`) per test.
+The three unit benches build their own top and are invoked directly.
+`run_fused_rom` and `run_fused_sram` run two passes, round-robin and
+`FIXED_B_PRIO = 1`, and take an optional `rr` / `fixb` selector to run
+one; `run_default_subordinate` has a single pass (that block has no
+arbiter). The same `FUSED_FIXED_B_PRIO` macro drives the fabric bench
+and both controller benches, so one flag selects the fixed-B build
+everywhere. `run_fused_sram -seed N` pins the random seed.
+
+| Bench | Pins |
+|-------|------|
+| `tb_ahb_default_subordinate` | The IHI0033C Table 3-1 response per `htrans` (IDLE / BUSY: zero-wait OKAY; NONSEQ / SEQ: two-cycle ERROR), the deselected case, an address phase presented with `hready = 0`, and back-to-back transfers. |
+| `tb_ahb_fused_rom_ctrl` | T1–T15: each port alone, both ports concurrently (sequential and random addresses), pipelined Port-A reads, a Port-B write answered ERROR, back-to-back Port-B writes, `hclk_en_o` / `hresp_o`, a Port-A request held pending across back-to-back Port-B reads, and walking-one / walking-zero addresses on both ports at once (T15). |
+| `tb_ahb_fused_sram_ctrl` | T1–T45: byte / halfword / word writes and read-back, write-buffer timing, write-to-read forwarding (same word, multi-write chain, mixed sizes), pipelined write→read and read→write on Port B, SEQ / BUSY on Port B, external wait states, sustained write streams under continuous Port-A fetch, a constrained-random stress phase, the bounded write-commit latency, and walking-one / walking-zero addresses with Port-A / Port-B contention and forwarding (T45). |
+
+Under `FIXED_B_PRIO = 1`, the tests that need both ports served fairly
+are compiled out (`ifndef FUSED_FIXED_B_PRIO`) and the Port-A wait bound
+is not checked: starving Port A is that mode's documented behaviour.
 
 ---
 
 ## Synthesis
 
-The Design Compiler flow lives under `synthesis/synopsys/` and uses the
-standard `LIB_FLAVOR` env-var mechanism shared by the rest of the
-aRVern IP family. A `-design <variant>` flag picks the synthesis top
-among the three fabrics; per-fabric wrappers
-(`run_syn_generic` / `run_syn_hiperf`) pin the variant so you don't
-need to remember the full top-level name.
+The Design Compiler flow lives in `synthesis/synopsys/` and uses the
+`LIB_FLAVOR` mechanism shared by the aRVern IPs: `library.tcl` sources
+`libraries/setup_<flavor>.tcl`, and `run_syn` picks the flavor
+`lib_default` when given no `-lib`. The tree ships
+`libraries/setup_lib_example.tcl` as the template, not
+`setup_lib_default.tcl`, because that file names your technology.
+Create it first:
 
 ```bash
 cd synthesis/synopsys
-./run_syn                            # default: ahb_interconnect_fused with lib_default
-./run_syn_generic                    # synthesise ahb_interconnect_generic with lib_default
-./run_syn_hiperf  -lib <flavor>      # synthesise ahb_interconnect_hiperf with a specific library
-./run_syn         -lib <flavor> -design ahb_interconnect_hiperf -i
-                                     # interactive mode (keep dc_shell open)
-./run_syn_d       -lib <flavor>      # same, inside the dockerised DC image
+cp libraries/setup_lib_example.tcl libraries/setup_lib_default.tcl
+$EDITOR libraries/setup_lib_default.tcl   # library files, operating conditions, clock period
 ```
 
-`-design` accepts `ahb_interconnect_generic`, `ahb_interconnect_hiperf`,
-or `ahb_interconnect_fused`. Each variant has its own boundary-timing
-file (`constraints_ports.generic.tcl`, `constraints_ports.hiperf.tcl`,
-`constraints_ports.fused.tcl`); `constraints.tcl` dispatches on
-`DESIGN_NAME`. The fused variant uses ROM / SRAM macro pins on its
-`s_x_*` boundary instead of AHB ports; integrators will typically
-re-synthesise it inside their SoC with the actual memory macros' `.lib`
-resolved into `link_library`, and wrap `rom_clk_o` / `sram_clk_o` with
-`create_generated_clock` once the macros are in scope.
+Then:
 
-Available `<flavor>` values are derived from `setup_*.tcl` files under
-`synthesis/synopsys/libraries/` — running `./run_syn` with an unknown
-flavor prints the full list.
+```bash
+./run_syn                                    # ahb_interconnect_fused with the default flavor lib_default
+./run_syn_generic                            # ahb_interconnect_generic
+./run_syn_hiperf -lib <flavor>               # ahb_interconnect_hiperf, given library
+./run_syn -design ahb_interconnect_hiperf -i # keep dc_shell open afterwards
+```
 
-Outputs land in `synthesis/synopsys/results/`:
+`<flavor>` is any `setup_<flavor>.tcl` under `synthesis/synopsys/libraries/`;
+an unknown flavor prints the list. Each variant has its own boundary
+timing file, `constraints_ports.<variant>.tcl`. After each run
+`extract_worst_path.py` prints the worst paths of the report, and
+`run_check_reset_style -design <variant>` runs a PrimeTime pass over the
+netlist that classifies every flop's reset as asynchronous or
+synchronous against the RTL's `ASYNC_RST_EN`.
 
-| File                                | Description                                  |
-|-------------------------------------|----------------------------------------------|
-| `ahb_interconnect_<variant>.gate.v` | Gate-level netlist                           |
-| `ahb_interconnect_<variant>.ddc`    | Synopsys DDC database                        |
-| `ahb_interconnect_<variant>.spf`    | DFT scan test protocol (when DFT enabled)    |
-| `report.area`, `report.full_area`   | Area summary (incl. NAND2-equivalent)        |
-| `report.timing`, `report.paths.*`   | Timing and worst-path reports                |
-| `report.constraints`                | Constraint compliance                        |
-| `report.dft_*`                      | DFT DRC, coverage, scan-chain configuration  |
-| `synthesis.log`                     | Full dc_shell transcript                     |
+The fabric's longest paths leave and re-enter the IP within one cycle
+through blocks the integrator supplies: a subordinate's `hreadyout` →
+`m_request_o` → external arbiter → `m_grant_i` → `s_decoder_addr_o` →
+external decoder → `s_decoder_1hot_i` → subordinate select (and, on
+hiperf, once more through the level-2 channel's arbiter), plus the same
+cone into `hclk_en_o` and the clock gate. The `constraints_ports` files
+state the input and output delays the IP-level synthesis assumes for
+those ports; an SoC whose arbiter or decoder is slower must adjust them.
+The `chip_example` SoC in
+[`arvern-soc`](https://github.com/Arvern-Silicon/arvern-soc) closes the
+complete loop and is the reference for chip-level timing.
+
+The fused variant should be re-synthesised inside the SoC with the real
+memory macros in `link_library`, and `rom_clk_o` / `sram_clk_o` given a
+`create_generated_clock`.
+
+Results land in `synthesis/synopsys/results/`: the gate-level netlist
+and DDC database (`<variant>.gate.v`, `<variant>.ddc`), the scan test
+protocol (`<variant>.spf`), area, timing, constraint and DFT reports,
+and the full `synthesis.log`.
 
 ---
 
 ## License
 
-BSD 3-Clause — see [`LICENSE`](../../LICENSE) at the repo root.
+BSD 3-Clause — see [`LICENSE`](../../LICENSE) at the repository root.

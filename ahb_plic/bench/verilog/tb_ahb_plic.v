@@ -92,7 +92,9 @@ wire    [NUM_SOURCES:0]      irq_src_i;
 wire    [NUM_HARTS-1:0]      irq_m_external;
 wire    [NUM_HARTS-1:0]      irq_s_external;
 
-assign irq_src_i = irq_src;
+// 1 ns after the stimulus: a test sets irq_src on a clock edge, and a same-edge change
+// races the DUT's gateway flops (the simulators order it differently).
+assign #1 irq_src_i = irq_src;
 
 // Testbench variables
 integer                      tb_idx;
@@ -177,6 +179,25 @@ assign hsel   = (haddr[31:22] == 10'h001);
 //
 // AHB PLIC INSTANCE
 //----------------------------------
+// Bus inputs reach the DUT 1 ns after the tasks drive them, for the same reason as
+// irq_src_i: a task started on a clock edge would otherwise race the DUT's flops.
+wire                  [31:0] haddr_d;
+wire                   [2:0] hsize_d;
+wire                   [1:0] htrans_d;
+wire                   [3:0] hprot_d;
+wire                         hsmode_d;
+wire                  [31:0] hwdata_d;
+wire                         hwrite_d;
+wire                         hsel_d;
+assign #1 haddr_d  = haddr;
+assign #1 hsize_d  = hsize;
+assign #1 htrans_d = htrans;
+assign #1 hprot_d  = hprot;
+assign #1 hsmode_d = hsmode;
+assign #1 hwdata_d = hwdata;
+assign #1 hwrite_d = hwrite;
+assign #1 hsel_d   = hsel;
+
 ahb_plic #(
     .NUM_SOURCES        ( NUM_SOURCES            ),
     .NUM_HARTS          ( NUM_HARTS              ),
@@ -191,15 +212,15 @@ ahb_plic #(
     .hresetn_i         ( hresetn                ),
 
 // AHB INTERFACE
-    .hsel_i            ( hsel                   ),
-    .haddr_i           ( haddr[21:0]            ),
-    .hwrite_i          ( hwrite                 ),
-    .hsize_i           ( hsize                  ),
-    .htrans_i          ( htrans                 ),
-    .hprot_i           ( hprot                  ),
-    .hsmode_i          ( hsmode                 ),
+    .hsel_i            ( hsel_d                 ),
+    .haddr_i           ( haddr_d[21:0]          ),
+    .hwrite_i          ( hwrite_d               ),
+    .hsize_i           ( hsize_d                ),
+    .htrans_i          ( htrans_d               ),
+    .hprot_i           ( hprot_d                ),
+    .hsmode_i          ( hsmode_d               ),
     .hready_i          ( hready                 ),
-    .hwdata_i          ( hwdata                 ),
+    .hwdata_i          ( hwdata_d               ),
     .hrdata_o          ( hrdata                 ),
     .hreadyout_o       ( hreadyout              ),
     .hresp_o           ( hresp                  ),
@@ -234,6 +255,17 @@ initial
    `endif
   end
 
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once reset is released: the Verilator coverage flow starts
+// every flop at 1 so the asynchronous resets see an edge, and the reset driving them
+// to 0 would otherwise count as a toggle of every bit.
+initial begin
+    wait (hresetn === 1'b0);
+    @(posedge hresetn);
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 //
 // End of simulation

@@ -46,6 +46,7 @@ module  ahb_interconnect_hiperf (
     m_nx_haddr_i,
     m_nx_hauser_i,
     m_nx_hburst_i,
+    m_nx_hmaster_i,
     m_nx_hmastlock_i,
     m_nx_hprot_i,
     m_nx_hsize_i,
@@ -108,12 +109,17 @@ module  ahb_interconnect_hiperf (
 
 // PARAMETERs
 //======================================
-parameter                          NR_M         = 2;              // Number of non-executable AHB Managers
-parameter                          NR_S_X       = 2;              // Number of AHB Subordinates in executable space
-parameter                          NR_S_NX      = 3;              // Number of AHB Subordinates in non-executable space
-parameter                          HAUSER_W     = 1;              // Width of the HAUSER bus (min value is 1)
-parameter                          ASYNC_RST_EN = 1'b1;           // 1=async active-low reset, 0=synchronous reset
-localparam                         NR_S         = NR_S_X+NR_S_NX; // Total number of AHB Subordinates
+parameter                          NR_M              = 2;                      // Number of non-executable AHB Managers
+parameter                          NR_S_X            = 2;                      // Number of AHB Subordinates in executable space
+parameter                          NR_S_NX           = 3;                      // Number of AHB Subordinates in non-executable space
+parameter                          HAUSER_W          = 1;                      // Width of the HAUSER bus (min value is 1)
+parameter             [4*NR_M-1:0] M_NX_HMASTER_ID   = {4*NR_M{1'b0}};         // HMASTER ID of each non-executable manager (4 bits each); all-zero: manager i gets ID i+1
+parameter             [4*NR_M-1:0] M_NX_HMASTER_TAG  = {4*NR_M{1'b0}};         // m_nx_hmaster_i bits each manager may OR into its ID
+parameter                          ASYNC_RST_EN      = 1'b1;                   // 1=async active-low reset, 0=synchronous reset
+
+localparam                         NR_S              = NR_S_X+NR_S_NX;         // Total number of AHB Subordinates
+localparam              [4*15-1:0] NX_HMASTER_ID_SEQ = 60'hFEDC_BA98_7654_321; // Default numbering (all-zero M_NX_HMASTER_ID): manager i gets ID i+1
+localparam            [4*NR_M-1:0] NX_HMASTER_ID     = (M_NX_HMASTER_ID == {4*NR_M{1'b0}}) ? NX_HMASTER_ID_SEQ[4*NR_M-1:0] : M_NX_HMASTER_ID;
 
 // AHB CLOCK & RESET
 //======================================
@@ -143,6 +149,7 @@ output wire                        m_x_hresp_o;
 input  wire          [32*NR_M-1:0] m_nx_haddr_i;
 input  wire    [HAUSER_W*NR_M-1:0] m_nx_hauser_i;
 input  wire           [3*NR_M-1:0] m_nx_hburst_i;
+input  wire           [4*NR_M-1:0] m_nx_hmaster_i;
 input  wire             [NR_M-1:0] m_nx_hmastlock_i;
 input  wire           [4*NR_M-1:0] m_nx_hprot_i;
 input  wire           [3*NR_M-1:0] m_nx_hsize_i;
@@ -210,10 +217,14 @@ output wire          [NR_S_NX-1:0] s_nx_hwrite_o;
 //=============================================================================
 // 0)  PARAMETER RANGE CHECKS
 //=============================================================================
-// HMASTER ID array (section 2) holds 15 entries (4'h1..4'hF, 4'h0 reserved
-// for the executable manager). NR_M must fit.
+// HMASTER is 4 bits wide and 4'h0 belongs to the executable manager, so at
+// most 15 non-executable managers can hold distinct IDs. Every value a manager
+// can present (its ID OR any subset of its tag bits) must be unique and
+// non-zero: tag bits may not overlap the ID, and two managers collide when
+// their IDs agree on every bit neither of them tags.
 
 // pragma translate_off
+genvar gi, gj;
 generate
     if ((NR_M < 1) || (NR_M > 15)) begin : CHECK_NR_M
         initial $fatal(1, "ahb_interconnect_hiperf: NR_M (%0d) is out of range [1,15].", NR_M);
@@ -230,6 +241,19 @@ generate
      if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "ahb_interconnect_hiperf: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
     end
+    for (gi = 0; gi < NR_M; gi = gi + 1) begin : CHECK_M_NX_HMASTER
+        if (NX_HMASTER_ID[4*gi+:4] == 4'h0) begin : ID_ZERO
+            initial $fatal(1, "ahb_interconnect_hiperf: non-executable manager %0d M_NX_HMASTER_ID is 4'h0 (executable manager).", gi);
+        end
+        if ((NX_HMASTER_ID[4*gi+:4] & M_NX_HMASTER_TAG[4*gi+:4]) != 4'h0) begin : TAG_IN_ID
+            initial $fatal(1, "ahb_interconnect_hiperf: non-executable manager %0d M_NX_HMASTER_TAG overlaps its M_NX_HMASTER_ID.", gi);
+        end
+        for (gj = gi + 1; gj < NR_M; gj = gj + 1) begin : PAIR
+            if (((NX_HMASTER_ID[4*gi+:4] ^ NX_HMASTER_ID[4*gj+:4]) & ~(M_NX_HMASTER_TAG[4*gi+:4] | M_NX_HMASTER_TAG[4*gj+:4])) == 4'h0) begin : COLLISION
+                initial $fatal(1, "ahb_interconnect_hiperf: non-executable managers %0d and %0d can present the same HMASTER.", gi, gj);
+            end
+        end
+    end
 endgenerate
 // pragma translate_on
 
@@ -242,8 +266,8 @@ endgenerate
 // Signals for the non-executable paths
 //-----------------------------------------------
 
-wire               [4*15-1:0] m_nx_hmaster;
-wire        [4*(15-NR_M)-1:0] m_nx_hmaster_unused;
+wire             [4*NR_M-1:0] m_nx_hmaster;
+wire             [4*NR_M-1:0] m_nx_hmaster_unused;
 
 wire                   [31:0] nx_hrdata;
 wire                          nx_hreadyout;
@@ -254,7 +278,6 @@ wire                    [2:0] nx_hburst;
 wire                    [3:0] nx_hmaster;
 wire                          nx_hmastlock;
 wire                    [3:0] nx_hprot;
-wire                          nx_hready_unused;
 wire                          nx_hsel;
 wire                    [2:0] nx_hsize;
 wire                    [1:0] nx_htrans;
@@ -358,9 +381,17 @@ wire                          x_hclk_en_dflt_subordinate;
 // 2)  AHB MANAGER MULTIPLEXOR
 //=============================================================================
 
-// HMASTER assignments for each manager
-assign m_nx_hmaster = {4'hF, 4'hE, 4'hD, 4'hC, 4'hB, 4'hA, 4'h9, 4'h8,
-                       4'h7, 4'h6, 4'h5, 4'h4, 4'h3, 4'h2, 4'h1      };  // 4'h0 is reserved for the executable manager
+// HMASTER of each non-executable manager: its ID combined with its enabled tag bits.
+// Example with NR_M = 2, manager 0 tagging on bit 3 (e.g. aRVern data_hmaster_o):
+//   M_NX_HMASTER_ID  = 8'h00  -> default IDs {2, 1}
+//   M_NX_HMASTER_TAG = 8'h08  -> manager 0 may set bit 3 (m_nx_hmaster_i[3])
+//   HMASTER: manager 0 = 4'h1 or 4'h9, manager 1 = 4'h2 (executable manager = 4'h0)
+// With explicit IDs, M_NX_HMASTER_ID = 8'h42 and M_NX_HMASTER_TAG = 8'h01 give
+// 4'h2 or 4'h3, 4'h4.
+assign m_nx_hmaster = NX_HMASTER_ID | (m_nx_hmaster_i & M_NX_HMASTER_TAG);
+
+// Bits outside M_NX_HMASTER_TAG are ignored (all of them at the default)
+assign m_nx_hmaster_unused = m_nx_hmaster_i;
 
 ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_manager_mux_inst_nx (
 
@@ -374,7 +405,7 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .m_haddr_i         ( m_nx_haddr_i             ),
     .m_hauser_i        ( m_nx_hauser_i            ),
     .m_hburst_i        ( m_nx_hburst_i            ),
-    .m_hmaster_i       ( m_nx_hmaster[4*NR_M-1:0] ),
+    .m_hmaster_i       ( m_nx_hmaster             ),
     .m_hmastlock_i     ( m_nx_hmastlock_i         ),
     .m_hprot_i         ( m_nx_hprot_i             ),
     .m_hready_i        ( m_nx_hready_o            ),
@@ -403,15 +434,12 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .hmaster_o         ( nx_hmaster               ),
     .hmastlock_o       ( nx_hmastlock             ),
     .hprot_o           ( nx_hprot                 ),
-    .hready_o          ( nx_hready_unused         ),
     .hsel_o            ( nx_hsel                  ),
     .hsize_o           ( nx_hsize                 ),
     .htrans_o          ( nx_htrans                ),
     .hwdata_o          ( nx_hwdata                ),
     .hwrite_o          ( nx_hwrite                )
 );
-
-assign m_nx_hmaster_unused = m_nx_hmaster[4*15-1:4*NR_M];
 
 
 //=============================================================================
@@ -633,13 +661,15 @@ generate
             .hmaster_o         ( s_x_hmaster_o[4*ii+:4]                                                        ),
             .hmastlock_o       ( s_x_hmastlock_o[ii]                                                           ),
             .hprot_o           ( s_x_hprot_o[4*ii+:4]                                                          ),
-            .hready_o          ( s_x_hready_o[ii]                                                              ),
             .hsel_o            ( s_x_hsel_o[ii]                                                                ),
             .hsize_o           ( s_x_hsize_o[3*ii+:3]                                                          ),
             .htrans_o          ( s_x_htrans_o[2*ii+:2]                                                         ),
             .hwdata_o          ( s_x_hwdata_o[32*ii+:32]                                                       ),
             .hwrite_o          ( s_x_hwrite_o[ii]                                                              )
         );
+
+        // HREADY to the executable subordinate.
+        assign s_x_hready_o[ii] = s_x_hreadyout_i[ii];
 
         ahb_arbiter_2m #(.ARST_EN(ASYNC_RST_EN)) ahb_arbiter_2_inst (
 

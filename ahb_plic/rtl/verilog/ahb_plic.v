@@ -45,9 +45,9 @@
 module  ahb_plic #(
     parameter                   NUM_SOURCES     = 31,  // Number of interrupt sources (1..1023, src 0 reserved)
     parameter                   NUM_HARTS       = 1,   // Number of harts (1..16)
-    parameter                   SU_MODE_EN      = 1,   // 1 => instantiate per-hart S-context too
+    parameter                   SU_MODE_EN      = 0,   // 1 => instantiate per-hart S-context too; set equal to the core's SU_MODE_EN (same default)
     parameter                   PRIO_BITS       = 3,   // Priority width per source (1..7)
-    parameter                   PRIV_CHECK_EN   = 1,   // 1 => enforce M/S/U privilege checker via hprot_i[1] + hsmode_i; 0 => allow any access (legacy / fabric-policed)
+    parameter                   PRIV_CHECK_EN   = 1,   // 1 => enforce M/S/U privilege checker via hprot_i[1] + hsmode_i; 0 => allow any access (the fabric polices privilege)
     parameter                   ASYNC_RST_EN    = 1'b1 // Reset architecture: 1=async active-low reset, 0=synchronous reset (threaded to all flops via arv_ipdff)
 ) (
 
@@ -60,7 +60,7 @@ module  ahb_plic #(
     input  wire                 hsel_i,                // Slave select
     input  wire          [21:0] haddr_i,               // AHB byte address (4 MB PLIC window per the SiFive layout)
     input  wire                 hwrite_i,              // Write enable
-    input  wire           [2:0] hsize_i,               // Transfer size (only word is meaningful)
+    input  wire           [2:0] hsize_i,               // Transfer size; any size other than word is answered with ERROR
     input  wire           [1:0] htrans_i,              // Transfer type (NONSEQ/SEQ start an access)
     input  wire           [3:0] hprot_i,               // AHB-Lite protection; bit[1]=1 privileged, bit[1]=0 unprivileged. Other bits ignored.
     input  wire                 hsmode_i,              // aRVern privilege extension: when hprot_i[1]=1, 0=M, 1=S. Don't-care when hprot_i[1]=0.
@@ -84,7 +84,7 @@ module  ahb_plic #(
 // 1)  LOCAL PARAMETERS
 //=============================================================================
 
-localparam        NUM_CONTEXTS    = SU_MODE_EN ? 2*NUM_HARTS : NUM_HARTS;
+localparam        NUM_CONTEXTS    = (SU_MODE_EN != 0) ? 2*NUM_HARTS : NUM_HARTS;
 
 localparam [21:0] PRIORITY_BASE   = 22'h000000;
 localparam [21:0] PENDING_BASE    = 22'h001000;
@@ -184,11 +184,10 @@ endgenerate
 //
 // The deny rule is built off the per-context decode (in_enable_per_ctx,
 // in_target) AND-ed against a per-context M-class mask, then OR-reduced.
-// This makes the privilege check fire ONLY when the access actually lands
-// on a valid M-context register -- out-of-range addresses inside the
-// enable / target windows that no real context owns are left to the
-// sub-block's RAZ/WI path, avoiding an address-layout info leak via
-// ERROR-vs-OK probing.
+// The check therefore fires for any access into a real M-context's block
+// (the whole 128-byte enable stride and its target registers); addresses
+// that no context owns are left to the sub-block's RAZ/WI path. A denied
+// master can still tell which contexts exist from ERROR vs OK.
 //
 // Per-context class:
 //       SU_MODE_EN=1 lays contexts out as ctx = 2*hart + s_mode,
@@ -221,7 +220,7 @@ generate
     end
 endgenerate
 
-// U-mode is is always denied
+// U-mode is always denied (already implied by the raw term; kept explicit)
 wire dph_priv_allowed = (PRIV_CHECK_EN == 1) ? (dph_priv_allowed_raw & ~dph_mode_u) : 1'b1;
 
 // Size check (always enforced).

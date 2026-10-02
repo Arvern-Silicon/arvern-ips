@@ -32,6 +32,21 @@
 `ifndef ACLINT_PRIV_CHECK_EN
    `define ACLINT_PRIV_CHECK_EN 1
 `endif
+`ifndef ACLINT_LF_HALF_PERIOD
+   `define ACLINT_LF_HALF_PERIOD 250
+`endif
+
+// Ratio helpers
+`define LF_RATIO         (`ACLINT_LF_HALF_PERIOD / 25)
+`define LF_CYCLES(n)     ((n) * `LF_RATIO)
+
+// LF_SYNC_EN: 0 = clk_lf is a real independent oscillator (default);
+// 1 = synchronous mode: clk_lf is still the timebase source, but the IP samples
+// it as data and clocks every flop from hclk_aon instead.
+`ifndef ACLINT_LF_SYNC_EN
+   `define ACLINT_LF_SYNC_EN 0
+`endif
+
 `ifndef ACLINT_ASYNC_RST_EN
    `define ACLINT_ASYNC_RST_EN 1
 `endif
@@ -43,6 +58,7 @@ module  tb_ahb_aclint;
 parameter NUM_HARTS     = `ACLINT_NUM_HARTS;
 parameter SU_MODE_EN    = `ACLINT_SU_MODE_EN;
 parameter PRIV_CHECK_EN = `ACLINT_PRIV_CHECK_EN;
+parameter LF_SYNC_EN    = `ACLINT_LF_SYNC_EN;
 parameter ASYNC_RST_EN  = `ACLINT_ASYNC_RST_EN;
 
 //
@@ -51,13 +67,17 @@ parameter ASYNC_RST_EN  = `ACLINT_ASYNC_RST_EN;
 
 // Clock / Reset (AHB / hclk domain)
 reg                  hresetn;
-reg                  free_clk;
+wire                 free_clk;
+wire                 hclk_aon_en;   // oscillator's own enable view -> DUT hclk_aon_en_i   // driven by u_aon_osc (the always-on oscillator)
 wire                 hclk;
+wire                 hclk_aon;
 wire                 hclk_en;
 
 // Clock / Reset (Low-frequency / always-on domain)
 reg                  clk_lf;
+integer              lf_high_period;   // high-phase width in ns; defaults to a 50% duty cycle
 reg                  resetn_lf;
+reg                  scan_mode = 1'b0;   // DUT scan_mode_i; only scan-mode tests set it
 
 // AHB Subordinate Interface (master-side regs)
 reg           [31:0] haddr;
@@ -76,7 +96,7 @@ wire                 hsel;
 // DUT IRQ outputs (sized by NUM_HARTS)
 wire [NUM_HARTS-1:0] irq_m_software;
 wire [NUM_HARTS-1:0] irq_m_timer;
-wire [NUM_HARTS-1:0] mtimer_wake_lf;
+wire                 mtimer_wake_lf;   // single bit: any hart (OR of the per-hart LF comparators)
 wire [NUM_HARTS-1:0] irq_s_software;
 
 // Zicntr time-port (driven by the zicntr BFM; observed by the scoreboard)
@@ -113,22 +133,63 @@ reg                  stimulus_done;
 // Generate Clock & Reset
 //------------------------------
 
-// Free running clock - 20 MHz (period 50 ns = 2*25 ns)
-initial
-  begin
-     free_clk  = 1'b0;
-     forever
-       begin
-          #25;   // 20 MHz
-          free_clk = ~free_clk;
-       end
-  end
+// THE ALWAYS-ON OSCILLATOR.
+reg  allow_deep_sleep;
+initial allow_deep_sleep = 1'b0;
 
-// SoC-side ICG model
+wire osc_enable = hclk_en | ~allow_deep_sleep;
+
+// The oscillator and its controller, wired as a SoC would: the model only
+// toggles, and arv_osc_ctrl -- the same synthesizable block an integrator uses --
+// owns the stop sequence, so hclk_aon_en falls exactly one edge before the clock
+// does.
+wire osc_run;
+
+// ACLINT_OSC_ZERO_EDGE models an oscillator controller that violates the
+// hclk_aon_en_i contract: the oscillator stops on the announce itself, so no edge
+// is delivered with hclk_aon_en low (see mtimer_deep_sleep_zero_edge).
+`ifdef ACLINT_OSC_ZERO_EDGE
+wire osc_en_model = osc_run & hclk_aon_en;
+`else
+wire osc_en_model = osc_run;
+`endif
+
+osc #(.HALF_PERIOD(25)) u_aon_osc (      // 20 MHz
+    .en_i      ( osc_en_model   ),
+    .clk_o     ( free_clk       )
+);
+
+arv_osc_ctrl u_aon_osc_ctrl (
+    .osc_clk_i ( free_clk       ),
+    .osc_en_o  ( osc_run        ),
+    .resetn_i  ( hresetn        ),
+    .scan_mode_i ( 1'b0         ),
+    .wake_i    ( mtimer_wake_lf ),
+    .enable_i  ( osc_enable     ),
+    .clk_en_o  ( hclk_aon_en    )
+);
+
+// hclk_aon_i IS the oscillator -- not a gated copy of it.
+assign hclk_aon = free_clk;
+
+// SoC-side ICG model.
 reg hclk_en_latch;
-always @(free_clk or hclk_en or hresetn)
-  if (~free_clk) hclk_en_latch <= hclk_en | ~hresetn;  // CRG holds the clock running during reset (sync-reset init contract)
-assign hclk = (free_clk & hclk_en_latch);
+reg icg_ignore_reset;
+initial icg_ignore_reset = 1'b0;
+
+always @(free_clk or hclk_en or hresetn or icg_ignore_reset)
+  if (~free_clk) hclk_en_latch <= icg_ignore_reset ? hclk_en              // integrator omitted it
+                                                  : (hclk_en | ~hresetn); // CRG holds the clock running during reset
+assign hclk = (hclk_aon & hclk_en_latch);
+
+// Reset width. An ASYNC_RST_EN=0 build reaches its reset values only on clock
+// edges, so each reset has to span at least two edges of the clock that samples
+// it -- the IP states that for the LF side as a hard integration constraint. The
+// fixed 593 ns floor covers it at a short LF period, but not at a realistic
+// crystal ratio where one clk_lf period is longer than the whole pulse, so the
+// width is the larger of 593 ns and two LF periods.
+localparam integer LF_PERIOD = 2 * `ACLINT_LF_HALF_PERIOD;
+localparam integer RST_WIDTH = (593 > 2*LF_PERIOD) ? 593 : 2*LF_PERIOD;
 
 // Reset generation (hclk domain)
 initial
@@ -136,23 +197,37 @@ initial
      hresetn       = 1'b1;
      #93;
      hresetn       = 1'b0;
-     #593;
+     #(RST_WIDTH);
      hresetn       = 1'b1;
   end
 
-// Low-frequency clock (5 MHz, period 200 ns = 2*100 ns). Phase-shift by
-// a small offset relative to free_clk so the two clocks are demonstrably
+// Low-frequency clock. Half-period is `ACLINT_LF_HALF_PERIOD ns (default 250,
+// i.e. 2 MHz / 500 ns against the 20 MHz free_clk -- a 10:1 ratio). Phase-shift
+// by a small offset relative to free_clk so the two clocks are demonstrably
 // asynchronous.
+// The HIGH phase is separately controllable so a test can distort the duty
+// cycle. That matters because clk_lf is sampled AS DATA: what has to survive two
+// hclk_aon edges is each PHASE, not the period, so a 50% duty cycle is the
+// easy case and a lopsided one is where the tick detector actually breaks.
 initial
   begin
-     clk_lf = 1'b0;
+     clk_lf         = 1'b0;
+     lf_high_period = `ACLINT_LF_HALF_PERIOD;
      #7;
      forever
        begin
-          #100;
-          clk_lf = ~clk_lf;
+          #(2 * `ACLINT_LF_HALF_PERIOD - lf_high_period);
+          clk_lf = 1'b1;
+          #(lf_high_period);
+          clk_lf = 1'b0;
        end
   end
+
+// clk_lf is driven identically in BOTH modes: it is the timebase source either
+// way, and under LF_SYNC_EN the IP simply samples it instead of clocking flops
+// with it. Only resetn_lf changes -- it has no consumer in synchronous mode, so
+// tie it high there to prove the RTL really does not use it.
+wire resetn_lf_dut = (LF_SYNC_EN != 0) ? 1'b1 : resetn_lf;
 
 // Low-frequency reset. Pulse shape matches hresetn but is offset a few ns
 // so the LF reset deasserts after clk_lf is already toggling.
@@ -161,9 +236,22 @@ initial
      resetn_lf = 1'b1;
      #117;
      resetn_lf = 1'b0;
-     #617;
+     #(RST_WIDTH + 24);
      resetn_lf = 1'b1;
   end
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once both power-on resets are released: the Verilator coverage
+// flow starts every flop at 1 so the asynchronous resets see an edge, and the reset
+// driving them to 0 would otherwise count as a toggle of every bit.
+initial begin
+    fork
+        begin @(negedge hresetn);   @(posedge hresetn);   end
+        begin @(negedge resetn_lf); @(posedge resetn_lf); end
+    join
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 // Variables initialization
 initial
@@ -185,9 +273,39 @@ initial
      tb_force_stall = 1'b0;
   end
 
-assign hready = hreadyout & ~tb_force_stall;
+// Every input the bench drives reaches the DUT 1 ns after the bench sets it. Tests
+// assign inputs right after `@(posedge free_clk)`, in the same time step as the edge
+// the DUT samples on; without the delay which value the DUT sees depends on the
+// simulator's process order (Icarus and Verilator differ). hready stays combinational:
+// AHB requires it in the same cycle as hreadyout.
+wire          [31:0] haddr_d;
+wire           [1:0] htrans_d;
+wire                 hwrite_d;
+wire           [2:0] hsize_d;
+wire           [3:0] hprot_d;
+wire                 hsmode_d;
+wire          [31:0] hwdata_d;
+wire                 time_req_d;
+wire                 scan_mode_d;
+wire                 hresetn_d;
+wire                 resetn_lf_dut_d;
+wire                 tb_force_stall_d;
+assign #1 haddr_d          = haddr;
+assign #1 htrans_d         = htrans;
+assign #1 hwrite_d         = hwrite;
+assign #1 hsize_d          = hsize;
+assign #1 hprot_d          = hprot;
+assign #1 hsmode_d         = hsmode;
+assign #1 hwdata_d         = hwdata;
+assign #1 time_req_d       = time_req;
+assign #1 scan_mode_d      = scan_mode;
+assign #1 hresetn_d        = hresetn;
+assign #1 resetn_lf_dut_d  = resetn_lf_dut;
+assign #1 tb_force_stall_d = tb_force_stall;
+
+assign hready = hreadyout & ~tb_force_stall_d;
 // 64KB-aligned base for hsel decode. Tests issue accesses at 0x0040_xxxx.
-assign hsel   = (haddr[31:16] == 16'h0040);
+assign hsel   = (haddr_d[31:16] == 16'h0040);
 
 
 //
@@ -197,30 +315,33 @@ ahb_aclint #(
     .SU_MODE_EN        ( SU_MODE_EN             ),
     .NUM_HARTS         ( NUM_HARTS              ),
     .PRIV_CHECK_EN     ( PRIV_CHECK_EN          ),
+    .LF_SYNC_EN        ( LF_SYNC_EN             ),
     .ASYNC_RST_EN      ( ASYNC_RST_EN           )
 ) dut (
 
 // AHB CLOCK, RESET & WKUP (hclk_i gated by hclk_en_o, hclk_aon_i always-on)
     .hclk_i            ( hclk                   ),
-    .hclk_aon_i        ( free_clk               ),
-    .hresetn_i         ( hresetn                ),
+    .hclk_aon_i        ( hclk_aon               ),
+    .hresetn_i         ( hresetn_d              ),
     .hclk_en_o         ( hclk_en                ),
     .mtimer_wake_lf_o  ( mtimer_wake_lf         ),
 
 // LOW-FREQUENCY CLOCK & RESET
     .clk_lf_i          ( clk_lf                 ),
-    .resetn_lf_i       ( resetn_lf              ),
+    .resetn_lf_i       ( resetn_lf_dut_d        ),
+    .hclk_aon_en_i     ( hclk_aon_en            ),
+    .scan_mode_i       ( scan_mode_d            ),   // functional mode unless a test sets it
 
 // AHB-LITE SLAVE INTERFACE
     .hsel_i            ( hsel                   ),
-    .haddr_i           ( haddr[15:0]            ),
-    .hwrite_i          ( hwrite                 ),
-    .hsize_i           ( hsize                  ),
-    .htrans_i          ( htrans                 ),
-    .hprot_i           ( hprot                  ),
-    .hsmode_i          ( hsmode                 ),
+    .haddr_i           ( haddr_d[15:0]          ),
+    .hwrite_i          ( hwrite_d               ),
+    .hsize_i           ( hsize_d                ),
+    .htrans_i          ( htrans_d               ),
+    .hprot_i           ( hprot_d                ),
+    .hsmode_i          ( hsmode_d               ),
     .hready_i          ( hready                 ),
-    .hwdata_i          ( hwdata                 ),
+    .hwdata_i          ( hwdata_d               ),
     .hrdata_o          ( hrdata                 ),
     .hreadyout_o       ( hreadyout              ),
     .hresp_o           ( hresp                  ),
@@ -231,7 +352,7 @@ ahb_aclint #(
     .irq_s_software_o  ( irq_s_software         ),
 
 // ZICNTR TIME INTERFACE
-    .time_req_i        ( time_req               ),
+    .time_req_i        ( time_req_d             ),
     .time_gnt_o        ( time_gnt               ),
     .time_val_o        ( time_val               )
 );
@@ -241,17 +362,20 @@ ahb_aclint #(
 // SIM-ONLY MTIME SNAPSHOT MIRROR (testbench observability)
 //----------------------------------
 // Reconstructs the 64-bit AHB MTIME snapshot exactly as the design's atomic-read
-// latch captures it: mtime_binary sampled on the cycle mtime_valid pulses while
-// the read FSM is in its AHB-pending state -- the same strobe that loads the RTL's
-// production u_mtime_shadow_ahb_hi register (FSM_AHB_PEND == 2'b01). Probed here
-// from the testbench so no simulation-only flop has to live inside the synthesizable
-// design. Tests read the full 64-bit value via tb_ahb_aclint.mtime_shadow_ahb_sim.
+// latch captures it: mtime_rd_src sampled on an AHB MTIME_LO read while the
+// mirror is valid -- the same strobe that loads the RTL's production
+// u_mtime_shadow_ahb_hi register. The read source is mtime_rd_src, which is the
+// mirror normally and the pending write value while an MTIME load is still
+// outstanding, so this tracks read-after-write exactly as the design does.
+// Probed here from the testbench so no simulation-only flop has to live inside
+// the synthesizable design. Tests read the full 64-bit value via
+// tb_ahb_aclint.mtime_shadow_ahb_sim.
 reg [63:0] mtime_shadow_ahb_sim;
 always @(posedge hclk or negedge hresetn)
   if (~hresetn)
     mtime_shadow_ahb_sim <= 64'h0;
-  else if (dut.u_mtimer.mtime_valid & (dut.u_mtimer.fsm_state == 2'b01))
-    mtime_shadow_ahb_sim <= dut.u_mtimer.mtime_binary;
+  else if (dut.u_mtimer.ahb_mtime_lo_read & dut.u_mtimer.mirror_valid)
+    mtime_shadow_ahb_sim <= dut.u_mtimer.mtime_rd_src;
 
 
 //
@@ -285,13 +409,14 @@ initial // Timeout
   begin
    `ifdef NO_TIMEOUT
    `else
+     // Scaled by the clk_lf ratio
      `ifdef VERY_LONG_TIMEOUT
-       #500000000;
+       #(500000000 * `LF_RATIO / 4);
      `else
      `ifdef LONG_TIMEOUT
-       #5000000;
+       #(5000000   * `LF_RATIO / 4);
      `else
-       #500000;
+       #(500000    * `LF_RATIO / 4);
      `endif
      `endif
        $display(" ===============================================");

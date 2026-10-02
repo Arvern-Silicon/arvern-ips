@@ -1,6 +1,10 @@
 #!/bin/bash
 
 # Disable waveform dumping
+if [ "${1:-}" = "-cov" ]; then
+    exec ../bin/runcov
+fi
+
 SIMULATION_NODUMP=1
 export SIMULATION_NODUMP
 
@@ -61,6 +65,16 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim hiperf_arbiter         -hiperf  -random_ws     | tee $LOG_DIR/hiperf_arbiter-hiperf-ws.log
     ../bin/runsim arbiter_stress         -hiperf  -random_ws     | tee $LOG_DIR/arbiter_stress-hiperf-ws.log
 
+    # External arbiter that parks its grant on a default master (M0) while
+    # idle: the fabric must not start a transfer on a grant that is not
+    # backed by a same-cycle request (one-data-phase invariant, checked in
+    # the TB).  GENERIC only -- the hiperf/fused NX side shares the code path.
+    ../bin/runsim simple_arbiter         -arb_parked                             | tee $LOG_DIR/simple_arbiter-parked.log
+    ../bin/runsim simple_arbiter         -arb_parked             -random_ws      | tee $LOG_DIR/simple_arbiter-parked-ws.log
+    ../bin/runsim arbiter_stress         -arb_parked                             | tee $LOG_DIR/arbiter_stress-parked.log
+    ../bin/runsim arbiter_stress         -arb_parked             -random_ws      | tee $LOG_DIR/arbiter_stress-parked-ws.log
+    ../bin/runsim pipelined_advanced     -arb_parked             -random_ws      | tee $LOG_DIR/pipelined_advanced-parked-ws.log
+
     # FUSED fabric: M0 -> Port A read-only (instruction fetch); arbitration is
     # internal so the GENERIC/HIPERF external-arbiter tests are N/A.  The
     # fused_arbiter test exercises Port-A vs Port-B contention + the M1<->M2
@@ -75,6 +89,8 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim fused_arbiter          -fused                                  | tee $LOG_DIR/fused_arbiter-fused.log
     ../bin/runsim arbiter_stress         -fused                                  | tee $LOG_DIR/arbiter_stress-fused.log
     ../bin/runsim default_subordinate_stress -fused                              | tee $LOG_DIR/default_subordinate_stress-fused.log
+    ../bin/runsim fused_write_commit     -fused                                  | tee $LOG_DIR/fused_write_commit-fused.log
+    ../bin/runsim fused_x_write          -fused                                  | tee $LOG_DIR/fused_x_write-fused.log
 
     ../bin/runsim simple_rdwr            -fused                  -random_ws      | tee $LOG_DIR/simple_rdwr-fused-ws.log
     ../bin/runsim pipelined_rdwr         -fused                  -random_ws      | tee $LOG_DIR/pipelined_rdwr-fused-ws.log
@@ -87,6 +103,7 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim pipelined_advanced     -fused   -fixed_b_prio                  | tee $LOG_DIR/pipelined_advanced-fused-fixp.log
     ../bin/runsim fused_arbiter          -fused   -fixed_b_prio                  | tee $LOG_DIR/fused_arbiter-fused-fixp.log
     ../bin/runsim arbiter_stress         -fused   -fixed_b_prio                  | tee $LOG_DIR/arbiter_stress-fused-fixp.log
+    ../bin/runsim fused_write_commit     -fused   -fixed_b_prio                  | tee $LOG_DIR/fused_write_commit-fused-fixp.log
 
     ../bin/runsim simple_rdwr            -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/simple_rdwr-fused-fixp-ws.log
     ../bin/runsim pipelined_rdwr         -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/pipelined_rdwr-fused-fixp-ws.log
@@ -94,6 +111,53 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim fused_arbiter          -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/fused_arbiter-fused-fixp-ws.log
     ../bin/runsim arbiter_stress         -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/arbiter_stress-fused-fixp-ws.log
 
+
+    # Coverage-driven review follow-up tests
+    ../bin/runsim sideband_hsmode                                  | tee $LOG_DIR/sideband_hsmode.log
+    ../bin/runsim sideband_hsmode          -random_ws              | tee $LOG_DIR/sideband_hsmode-ws.log
+    ../bin/runsim sideband_hsmode -hiperf                          | tee $LOG_DIR/sideband_hsmode-hiperf.log
+    ../bin/runsim sideband_hsmode -hiperf  -random_ws              | tee $LOG_DIR/sideband_hsmode-hiperf-ws.log
+    ../bin/runsim sideband_hsmode -fused                           | tee $LOG_DIR/sideband_hsmode-fused.log
+    ../bin/runsim sideband_hsmode -fused   -random_ws              | tee $LOG_DIR/sideband_hsmode-fused-ws.log
+    ../bin/runsim size_align_contest                               | tee $LOG_DIR/size_align_contest.log
+    ../bin/runsim size_align_contest       -random_ws              | tee $LOG_DIR/size_align_contest-ws.log
+    ../bin/runsim size_align_contest -hiperf                       | tee $LOG_DIR/size_align_contest-hiperf.log
+    ../bin/runsim size_align_contest -hiperf -random_ws            | tee $LOG_DIR/size_align_contest-hiperf-ws.log
+    ../bin/runsim size_align_contest -fused                        | tee $LOG_DIR/size_align_contest-fused.log
+    ../bin/runsim size_align_contest -fused -random_ws             | tee $LOG_DIR/size_align_contest-fused-ws.log
+    ../bin/runsim size_align_contest -arb_parked                   | tee $LOG_DIR/size_align_contest-parked.log
+    ../bin/runsim size_align_contest -arb_parked -random_ws        | tee $LOG_DIR/size_align_contest-parked-ws.log
+    ../bin/runsim hiperf_arb_contests -hiperf                      | tee $LOG_DIR/hiperf_arb_contests-hiperf.log
+    ../bin/runsim hiperf_arb_contests -hiperf -random_ws           | tee $LOG_DIR/hiperf_arb_contests-hiperf-ws.log
+    ../bin/runsim fused_rom_contest -fused                         | tee $LOG_DIR/fused_rom_contest-fused.log
+    ../bin/runsim fused_rom_contest -fused -random_ws              | tee $LOG_DIR/fused_rom_contest-fused-ws.log
+    ../bin/runsim fused_rom_contest -fused -fixed_b_prio           | tee $LOG_DIR/fused_rom_contest-fused-fixp.log
+    ../bin/runsim fused_rom_contest -fused -fixed_b_prio -random_ws | tee $LOG_DIR/fused_rom_contest-fused-fixp-ws.log
+    ../bin/runsim midrun_reset                                     | tee $LOG_DIR/midrun_reset.log
+    ../bin/runsim midrun_reset -hiperf                             | tee $LOG_DIR/midrun_reset-hiperf.log
+    ../bin/runsim midrun_reset -fused                              | tee $LOG_DIR/midrun_reset-fused.log
+    ../bin/runsim xdflt_pipeline -fused                            | tee $LOG_DIR/xdflt_pipeline-fused.log
+    ../bin/runsim xdflt_pipeline -fused -random_ws                 | tee $LOG_DIR/xdflt_pipeline-fused-ws.log
+    ../bin/runsim xdflt_pipeline -hiperf                           | tee $LOG_DIR/xdflt_pipeline-hiperf.log
+    ../bin/runsim xdflt_pipeline -hiperf -random_ws                | tee $LOG_DIR/xdflt_pipeline-hiperf-ws.log
+    ../bin/runsim addr_walk                                        | tee $LOG_DIR/addr_walk.log
+    ../bin/runsim addr_walk -hiperf                                | tee $LOG_DIR/addr_walk-hiperf.log
+    ../bin/runsim addr_walk -fused                                 | tee $LOG_DIR/addr_walk-fused.log
+    ../bin/runsim burst_lock_forwarding                            | tee $LOG_DIR/burst_lock_forwarding.log
+    ../bin/runsim burst_lock_forwarding -random_ws                 | tee $LOG_DIR/burst_lock_forwarding-ws.log
+    ../bin/runsim burst_lock_forwarding -hiperf                    | tee $LOG_DIR/burst_lock_forwarding-hiperf.log
+    ../bin/runsim burst_lock_forwarding -hiperf -random_ws         | tee $LOG_DIR/burst_lock_forwarding-hiperf-ws.log
+    ../bin/runsim burst_lock_forwarding -fused                     | tee $LOG_DIR/burst_lock_forwarding-fused.log
+    ../bin/runsim burst_lock_forwarding -fused -random_ws          | tee $LOG_DIR/burst_lock_forwarding-fused-ws.log
+    ../bin/runsim hprot_sweep                                      | tee $LOG_DIR/hprot_sweep.log
+    ../bin/runsim hprot_sweep -hiperf                              | tee $LOG_DIR/hprot_sweep-hiperf.log
+    ../bin/runsim hprot_sweep -fused                               | tee $LOG_DIR/hprot_sweep-fused.log
+    ../bin/runsim addr_walk_contended                              | tee $LOG_DIR/addr_walk_contended.log
+    ../bin/runsim addr_walk_contended -hiperf                      | tee $LOG_DIR/addr_walk_contended-hiperf.log
+    ../bin/runsim addr_walk_contended -fused                       | tee $LOG_DIR/addr_walk_contended-fused.log
+    ../bin/runsim subordinate_error                                | tee $LOG_DIR/subordinate_error.log
+    ../bin/runsim subordinate_error -hiperf                        | tee $LOG_DIR/subordinate_error-hiperf.log
+    ../bin/runsim subordinate_error -fused                         | tee $LOG_DIR/subordinate_error-fused.log
 
     #--------------------------------------------------------------------------
     # Synchronous-reset pass
@@ -107,6 +171,9 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     # (and byte-identical) coverage.
     #--------------------------------------------------------------------------
     export SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
+    ../bin/runsim midrun_reset                                     | tee $LOG_DIR/midrun_reset-sync.log
+    ../bin/runsim midrun_reset -hiperf                             | tee $LOG_DIR/midrun_reset-hiperf-sync.log
+    ../bin/runsim midrun_reset -fused                              | tee $LOG_DIR/midrun_reset-fused-sync.log
 
     # GENERIC (default top)
     ../bin/runsim simple_rdwr                                    | tee $LOG_DIR/simple_rdwr-sync.log
@@ -126,6 +193,18 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     # Restore async (default) reset architecture for any subsequent iteration.
     unset SIM_EXTRA_DEFINES
 
+
+    # ------------------------------------------------------------------------
+    # Unit benches. These build their own top module rather than going through
+    # runsim, so they are invoked directly. Each arbitration pass gets its own
+    # log because parse_results scores a log by a single "PASSED" line.
+    # ------------------------------------------------------------------------
+    # ahb_default_subordinate has no arbiter, so it has a single pass.
+    ./run_default_subordinate                           | tee $LOG_DIR/unit_dflt_sub.log
+    ./run_fused_rom  rr                                 | tee $LOG_DIR/unit_fused_rom_rr.log
+    ./run_fused_rom  fixb                               | tee $LOG_DIR/unit_fused_rom_fixb.log
+    ./run_fused_sram rr                                 | tee $LOG_DIR/unit_fused_sram_rr.log
+    ./run_fused_sram fixb                               | tee $LOG_DIR/unit_fused_sram_fixb.log
 
     # Report regression results
     ../bin/parse_results $LOG_DIR                       | tee $LOG_DIR/../summary.$ii.log

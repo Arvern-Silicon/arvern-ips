@@ -11,10 +11,10 @@
 //----------------------------------------------------------------------------
 // File Name          : ahb_error_p2
 // Module Description : Cycle-accurate check of the two-cycle AHB ERROR protocol
-//                      (ahb_plic.v:431-443). The BFM samples hresp once, so a
-//                      regression to a 1-cycle error or wrong hreadyout shape
-//                      would pass. A denied access (here a byte-size access,
-//                      denied independent of privilege) must drive:
+//                      (the error FSM in ahb_plic). The BFM samples hresp once, so
+//                      a 1-cycle error or a wrong hreadyout shape would otherwise
+//                      pass. A denied access (here a byte-size access, denied
+//                      independent of privilege) must drive:
 //                        P1 : hresp=1, hreadyout=0  (error, stall)
 //                        P2 : hresp=1, hreadyout=1  (error, complete)
 //                        next: hresp=0              (recovered)

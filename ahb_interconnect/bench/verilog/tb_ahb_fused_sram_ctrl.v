@@ -159,7 +159,13 @@ wire        dut_b_write_stall          = 1'b0;
 wire        dut_b_sram_read_from_pause = dut.sram_read_from_pause & dut.m1_dph_ongoing;
 wire        dut_wr_buf_full            = (dut.state == dut.WRITE) | (dut.state == dut.READ_PENDING_WRITE);
 wire        dut_replay_pending         = dut.m0_aph_pending | dut.m1_aph_pending;
+// gen_arb_rr exists only in the round-robin build. Under FIXED_B_PRIO Port B
+// always wins when it requests, so Port A never holds priority.
+`ifdef FUSED_FIXED_B_PRIO
+wire        dut_priority_a             = 1'b0;
+`else
 wire        dut_priority_a             = ~dut.gen_arb_rr.toggle_priority;
+`endif
 wire [1:0]  dut_arb                    = {dut_replay_pending, dut_priority_a};
 wire        dut_sram_owner_b_wr        =  dut.sram_wr_active;
 wire        dut_sram_owner_a_rd        = ~dut.sram_wr_active &  dut.sram_rd_cmd &  dut.arb_grant[0];
@@ -217,6 +223,46 @@ reg b_hready_ext = 1'b1;
 assign m0_hready = a_hreadyout & a_hready_ext;
 assign m1_hready = b_hreadyout & b_hready_ext;
 
+// The DUT sees bench-driven inputs 1 ns after the bench sets them, and the bench sees
+// DUT outputs 1 ns late: the tasks change inputs and sample outputs right at clock
+// edges, and without the delays which value each side sees depends on the simulator's
+// process order (Icarus and Verilator differ). hready_i stays same-cycle from the
+// DUT's own hreadyout.
+wire [31:0]   m0_haddr_d;
+assign #1 m0_haddr_d = m0_haddr;
+wire          m0_hsel_d;
+assign #1 m0_hsel_d = m0_hsel;
+wire [1:0]    m0_htrans_d;
+assign #1 m0_htrans_d = m0_htrans;
+wire          a_hready_ext_d;
+assign #1 a_hready_ext_d = a_hready_ext;
+wire [31:0]   m1_haddr_d;
+assign #1 m1_haddr_d = m1_haddr;
+wire          m1_hsel_d;
+assign #1 m1_hsel_d = m1_hsel;
+wire [1:0]    m1_htrans_d;
+assign #1 m1_htrans_d = m1_htrans;
+wire          m1_hwrite_d;
+assign #1 m1_hwrite_d = m1_hwrite;
+wire [2:0]    m1_hsize_d;
+assign #1 m1_hsize_d = m1_hsize;
+wire [31:0]   m1_hwdata_d;
+assign #1 m1_hwdata_d = m1_hwdata;
+wire          b_hready_ext_d;
+assign #1 b_hready_ext_d = b_hready_ext;
+wire [31:0]   m0_hrdata_dut;
+assign #1 m0_hrdata = m0_hrdata_dut;
+wire          a_hreadyout_dut;
+assign #1 a_hreadyout = a_hreadyout_dut;
+wire          a_hresp_dut;
+assign #1 a_hresp = a_hresp_dut;
+wire [31:0]   m1_hrdata_dut;
+assign #1 m1_hrdata = m1_hrdata_dut;
+wire          b_hreadyout_dut;
+assign #1 b_hreadyout = b_hreadyout_dut;
+wire          b_hresp_dut;
+assign #1 b_hresp = b_hresp_dut;
+
 
 //=============================================================================
 // 4)  CLOCK  (10 ns period)  [section numbers shifted by 1 below]
@@ -242,30 +288,38 @@ end
 // 5)  DUT
 //=============================================================================
 
-ahb_fused_sram_ctrl dut (
+// FIXED_B_PRIO is selected at compile time via `+define+FUSED_FIXED_B_PRIO`,
+// mirroring the ROM controller's unit bench.
+`ifdef FUSED_FIXED_B_PRIO
+localparam DUT_FIXED_B_PRIO = 1'b1;
+`else
+localparam DUT_FIXED_B_PRIO = 1'b0;
+`endif
+
+ahb_fused_sram_ctrl #(.FIXED_B_PRIO(DUT_FIXED_B_PRIO)) dut (
     .hclk_i        (free_clk),
     .hresetn_i     (hresetn),
     .hclk_en_o     (hclk_en),
 
-    .a_haddr_i     (m0_haddr),
-    .a_hsel_i      (m0_hsel),
-    .a_htrans_i    (m0_htrans),
-    .a_hready_i    (m0_hready),
+    .a_haddr_i     (m0_haddr_d),
+    .a_hsel_i      (m0_hsel_d),
+    .a_htrans_i    (m0_htrans_d),
+    .a_hready_i    (a_hreadyout_dut & a_hready_ext_d),
     .a_hsize_i     (3'b010),
-    .a_hrdata_o    (m0_hrdata),
-    .a_hreadyout_o (a_hreadyout),
-    .a_hresp_o     (a_hresp),
+    .a_hrdata_o    (m0_hrdata_dut),
+    .a_hreadyout_o (a_hreadyout_dut),
+    .a_hresp_o     (a_hresp_dut),
 
-    .b_haddr_i     (m1_haddr),
-    .b_hsel_i      (m1_hsel),
-    .b_htrans_i    (m1_htrans),
-    .b_hwrite_i    (m1_hwrite),
-    .b_hsize_i     (m1_hsize),
-    .b_hwdata_i    (m1_hwdata),
-    .b_hready_i    (m1_hready),
-    .b_hrdata_o    (m1_hrdata),
-    .b_hreadyout_o (b_hreadyout),
-    .b_hresp_o     (b_hresp),
+    .b_haddr_i     (m1_haddr_d),
+    .b_hsel_i      (m1_hsel_d),
+    .b_htrans_i    (m1_htrans_d),
+    .b_hwrite_i    (m1_hwrite_d),
+    .b_hsize_i     (m1_hsize_d),
+    .b_hwdata_i    (m1_hwdata_d),
+    .b_hready_i    (b_hreadyout_dut & b_hready_ext_d),
+    .b_hrdata_o    (m1_hrdata_dut),
+    .b_hreadyout_o (b_hreadyout_dut),
+    .b_hresp_o     (b_hresp_dut),
 
     .sram_dout_i   (sram_dout),
     .sram_din_o    (sram_din),
@@ -417,6 +471,14 @@ task wait_check;
     input integer  exp_b_stall_max;
     begin
         wait_active = 1'b0;
+`ifdef FUSED_FIXED_B_PRIO
+        // Port B always wins when it requests, so an unbounded Port-A wait is
+        // the DOCUMENTED behaviour of this mode ("lets heavy non-executable
+        // traffic starve instruction fetch"), not a defect. Every other
+        // assertion in these tests still applies; only the fairness bound on
+        // Port A is meaningless here. Port-B bounds are left untouched.
+        exp_a_max = -1;
+`endif
         if (exp_a_max < 0)
             $display("INFO  [%0s waits]: Port-A HREADYOUT-low streak = %0d (no check)  (%0t ns)",
                      tname, wait_a_max, $time);
@@ -592,6 +654,81 @@ endtask
 
 
 //=============================================================================
+// 9e) MACRO ADDRESS MONITOR  (T45)
+//
+//     sram_addr_o is the full 30-bit word address (haddr[31:2]) of the access
+//     being served: while wk_on is set, every read command must carry the word
+//     address of one of the last WK_RING reads presented on either port, and
+//     every write command the address and data of one of the last WK_WRING
+//     Port-B writes, with all four byte strobes.
+//=============================================================================
+
+localparam WK_RING  = 8;
+localparam WK_WRING = 4;
+
+reg                    wk_on;
+reg            [29:0]  wk_ring   [0:WK_RING-1];
+reg            [29:0]  wk_wr_a   [0:WK_WRING-1];
+reg            [31:0]  wk_wr_d   [0:WK_WRING-1];
+integer                wk_wp;
+integer                wk_wwp;
+integer                wk_cmds;
+integer                wk_wcmds;
+integer                wk_bad;
+integer                wk_k;
+reg                    wk_hit;
+
+initial begin
+    wk_on    = 1'b0;
+    wk_wp    = 0;
+    wk_wwp   = 0;
+    wk_cmds  = 0;
+    wk_wcmds = 0;
+    wk_bad   = 0;
+end
+
+task wk_note;
+    input [31:0] addr;
+    begin
+        wk_ring[wk_wp % WK_RING] = addr[31:2];
+        wk_wp = wk_wp + 1;
+    end
+endtask
+
+task wk_note_wr;
+    input [31:0] addr;
+    input [31:0] data;
+    begin
+        wk_wr_a[wk_wwp % WK_WRING] = addr[31:2];
+        wk_wr_d[wk_wwp % WK_WRING] = data;
+        wk_wwp = wk_wwp + 1;
+    end
+endtask
+
+always @(negedge free_clk)
+    if (wk_on && hresetn && (sram_cen_n === 1'b0)) begin
+        wk_hit = 1'b0;
+        if (sram_wen_n !== 4'b1111) begin
+            wk_wcmds = wk_wcmds + 1;
+            for (wk_k = 0; wk_k < WK_WRING; wk_k = wk_k + 1)
+                if ((sram_addr === wk_wr_a[wk_k]) && (sram_din === wk_wr_d[wk_k]) && (sram_wen_n === 4'b0000))
+                    wk_hit = 1'b1;
+        end else begin
+            wk_cmds = wk_cmds + 1;
+            for (wk_k = 0; wk_k < WK_RING; wk_k = wk_k + 1)
+                if (sram_addr === wk_ring[wk_k]) wk_hit = 1'b1;
+        end
+        if (!wk_hit) begin
+            wk_bad = wk_bad + 1;
+            error  = error + 1;
+            if (wk_bad <= 8)
+                $display("ERROR [T45]: SRAM %0s command at word address 0x%08h (din 0x%08h, wen %b), not a presented access  (%0t ns)",
+                         (sram_wen_n !== 4'b1111) ? "write" : "read", sram_addr, sram_din, sram_wen_n, $time);
+        end
+    end
+
+
+//=============================================================================
 // 10)  TEST STIMULUS
 //=============================================================================
 
@@ -628,13 +765,14 @@ initial begin : main_stim
     a_idle;
     b_idle;
 
-    // Initialise SRAM with known random values; mirror into sram_ref
+    // Initialise SRAM with known random values; mirror into sram_ref. After reset:
+    // before it the controller's memory port is uninitialised and may write.
+    @(posedge hresetn);
     for (ii = 0; ii < NR_WORDS; ii = ii+1) begin
         sram_inst.mem[ii] = $urandom;
         sram_ref[ii]      = sram_inst.mem[ii];
     end
 
-    @(posedge hresetn);
     repeat(2) @(posedge free_clk);
     #1;
 
@@ -883,7 +1021,7 @@ initial begin : main_stim
         b_idle;
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T6", 0, 0, 0);
+        wait_check("T6", 0, 1, 0);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -895,6 +1033,7 @@ initial begin : main_stim
     //       (sram_rd_active=1 -> write deferred).  After A's data phase the
     //       SRAM is free; the pending write executes.  B reads back word[wi]
     //       to confirm.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
     // =======================================================================
     test_title = "T7: B write then A read (A priority over pending write)";
     $display("");
@@ -938,6 +1077,8 @@ initial begin : main_stim
     //       Same structure as rom_ctrl T4: fork A and B address phases into
     //       the same cycle; A wins first (priority_a=1 after reset/drain);
     //       B gets a one-cycle data-phase wait state; both data values correct.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
+`endif
     // =======================================================================
     test_title = "T8: Simultaneous A+B reads";
     $display("");
@@ -995,6 +1136,7 @@ initial begin : main_stim
     // T9 -- Pipelined A reads: 1 read/cycle, hreadyout stays 1
     //
     //       Identical to rom_ctrl T6.
+`endif
     // =======================================================================
     test_title = "T9: Pipelined A reads";
     $display("");
@@ -1028,6 +1170,7 @@ initial begin : main_stim
     // T10 -- Concurrent A+B reads, 16 rounds: toggle-priority stress
     //
     //       Identical pattern to rom_ctrl T7.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
     // =======================================================================
     test_title = "T10: Concurrent A+B reads, 16 rounds";
     $display("");
@@ -1068,6 +1211,8 @@ initial begin : main_stim
     //       coincides with the pending write draining -- so the write always
     //       commits by the time each round finishes.  sram_ref is updated
     //       eagerly; a final B readback pass verifies all 32 written locations.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
+`endif
     // =======================================================================
     test_title = "T11: Mixed random A reads + B writes";
     $display("");
@@ -1133,6 +1278,7 @@ initial begin : main_stim
     //         (e) write drains            -> 1  (sram_was_active tail)
     //         (f) back to idle            -> 0
     //       Also checks a_hresp=0 and b_hresp=0.
+`endif
     // =======================================================================
     test_title = "T12: hclk_en_o and hresp_o";
     $display("");
@@ -1323,6 +1469,7 @@ initial begin : main_stim
     //       requires FENCE.I before self-modifying code re-fetches).  After A
     //       completes, wr_pending drains on the first free SRAM cycle.  B
     //       reads back the written address to confirm the committed value.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
     // =======================================================================
     test_title = "T16: wr_pending drain after concurrent A read (no A fwd)";
     $display("");
@@ -1392,6 +1539,7 @@ initial begin : main_stim
     //       then the write drains.  The fork-join verifies that ahb_b_write
     //       returns (it would hang forever under the old opportunistic drain)
     //       and B readback confirms the committed value.
+`endif
     // =======================================================================
     test_title = "T18: Write not starved by continuous A fetch";
     $display("");
@@ -1495,7 +1643,7 @@ initial begin : main_stim
         chk_b(wi2[MEM_ADDRW-1:0], b_got, "T19 write2 drains under A fetch");
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T19", 1, 62, 62);
+        wait_check("T19", 2, 62, 62);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -1520,6 +1668,7 @@ initial begin : main_stim
     //          With fix: b_fwd_match=1 (arb==2'b10) -> b_fwd_bsel_r stays 4'hF.
     //          b_hreadyout←1. arb->2'b00.
     //   #1 after CLK C: m1_hrdata = new_val (fix) or old_val (no fix).
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
     // =======================================================================
     test_title = "T20: B-replay forwarding gap fix";
     $display("");
@@ -1572,10 +1721,12 @@ initial begin : main_stim
         a_idle;
         m1_hsel   = 1'b0; m1_htrans = 2'b00; m1_hwrite = 1'b0; m1_hwdata = 32'b0;
         @(posedge free_clk); #1;
-        // After NBA: b_hreadyout=1. b_fwd_bsel_r=4'hF (fix) or 0 (no fix).
-        // sram_dout_i = old_val (SRAM at word wi, write not yet fired).
-
-        // Sample m1_hrdata immediately (b_hreadyout=1 confirmed above).
+        // The replayed read completes when b_hreadyout=1: the cycle after the
+        // parked write has been restored (one-cycle hold), so wait for hready
+        // per AHB rather than sampling at a fixed cycle. Either the forwarded
+        // value or the freshly written macro word is acceptable -- both are
+        // new_val.
+        while (!m1_hready) begin @(posedge free_clk); #1; end
         b_got = m1_hrdata;
         if (b_got !== new_val) begin
             $display("ERROR [T20 B-replay fwd]: Port B @ word[%0d] -- got 0x%08h, expected forwarded 0x%08h; stale SRAM=0x%08h  (%0t ns)",
@@ -1594,7 +1745,7 @@ initial begin : main_stim
         chk_b(wi[MEM_ADDRW-1:0], b_got, "T20 write drained to SRAM");
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T20", 0, 1, 0);
+        wait_check("T20", 0, 2, 0);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -1605,6 +1756,8 @@ initial begin : main_stim
     //       whether to read (50%) and uses a random address.  Exercises the
     //       toggle-priority arbiter with mixed contested/uncontested cycles.
     //       Equivalent to ahb_fused_rom_ctrl TB T9.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
+`endif
     // =======================================================================
     test_title = "T21: A sequential + B sporadic random reads";
     $display("");
@@ -1661,6 +1814,8 @@ initial begin : main_stim
     //
     //       Mirror of T21: B addresses sequential, A addresses random.
     //       Equivalent to ahb_fused_rom_ctrl TB T10.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
+`endif
     // =======================================================================
     test_title = "T22: A random + B sequential reads";
     $display("");
@@ -1701,6 +1856,8 @@ initial begin : main_stim
     //
     //       Maximum address variability on both ports; exercises every
     //       toggle-priority pattern.  Equivalent to ahb_fused_rom_ctrl TB T11.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
+`endif
     // =======================================================================
     test_title = "T23: Both A and B random reads";
     $display("");
@@ -1751,6 +1908,7 @@ initial begin : main_stim
     //                   Phase 2 captures DW, Phase 1 latches read.
     //                   sram_rd_active=1 (B read) -> write goes to buffer.
     //       Cycle N+2 -- B read dph (sample hrdata = SRAM[R], no forwarding)
+`endif
     // =======================================================================
     test_title = "T24: Pipelined B write->read (different addresses)";
     $display("");
@@ -2193,7 +2351,7 @@ initial begin : main_stim
         end
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T29", 1, 85, 85);
+        wait_check("T29", 2, 85, 85);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -2345,6 +2503,7 @@ initial begin : main_stim
     //       Here we keep A+B both reading under a pending write so the arbiter
     //       cycles through 01->10->00->01 (or ->11->10) while b_fwd_match keeps
     //       re-asserting.  Forwarding must never return stale SRAM data.
+`ifndef FUSED_FIXED_B_PRIO   // RR mode only: fixed-B starves Port A
     // =======================================================================
     test_title = "T32: Arb-10 hold across extended contest";
     $display("");
@@ -2427,6 +2586,7 @@ initial begin : main_stim
     //       a cycle within a bounded number of cycles regardless of the
     //       concurrent read stream.  The read-back at the end confirms the
     //       write committed (stale data would indicate live-lock).
+`endif
     // =======================================================================
     test_title = "T33: pending B write commits under A fetch + B reads";
     $display("");
@@ -2485,7 +2645,7 @@ initial begin : main_stim
 
         repeat(2) @(posedge free_clk); #1;
         fwd_dbg_en = 1'b0;
-        wait_check("T33", 1, 1, 0);
+        wait_check("T33", 2, 1, 0);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -2783,7 +2943,7 @@ initial begin : main_stim
         chk_b(wi[MEM_ADDRW-1:0], b_got, "T36 write eventually committed after reads stopped");
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T36", 1, 1, 0);
+        wait_check("T36", 2, 1, 0);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -2880,7 +3040,7 @@ initial begin : main_stim
         // T37 is a data-integrity stress test.  The strict forwarding-coverage
         // bar lives in T38 (tighter stimulus: truly continuous pipelined B).
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T37", 1, 3, 3);
+        wait_check("T37", 2, 3, 3);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -3020,7 +3180,7 @@ initial begin : main_stim
                  fwd_cov_cnt - fwd_cov_pre, B_CNT);
 
         repeat(2) @(posedge free_clk); #1;
-        wait_check("T38", 1, 5, 5);
+        wait_check("T38", 2, 5, 5);   // +1: one-cycle parked-write hold (bounded commit), see arb_request
     end
 
 
@@ -3327,6 +3487,219 @@ initial begin : main_stim
 
 
     // =======================================================================
+    // T44 -- B write commit latency is bounded under a continuous A fetch
+    //
+    //       T18/T19/T39 read the written word back through Port B, which is
+    //       served from the pause buffer, and stop the A stream before they
+    //       look at the macro -- so they never observe whether the parked
+    //       write actually reaches the SRAM while Port A keeps fetching.
+    //
+    //       Here Port A issues NONSEQ reads back-to-back (no IDLE cycle,
+    //       like a CPU fetch stream) for the whole test. Five cycles in,
+    //       Port B writes wi. The check is on the macro write strobe: the
+    //       write must land (sram_wen_n != 4'b1111) within
+    //       T44_COMMIT_BOUND cycles of its data phase, and a Port A fetch of
+    //       wi issued after that bound must return the new value. A posted
+    //       write that only lands when the fetch stream pauses is an
+    //       unbounded coherency window; the FENCE.I contract only orders
+    //       the master, it cannot land the write for it.
+    // =======================================================================
+    test_title = "T44: B write commit bounded under continuous A fetch";
+    $display("");
+    $display("================================================================");
+    $display("T44: B write commit latency bounded under continuous A fetch");
+    $display("================================================================");
+
+    begin : t44
+        localparam T44_COMMIT_BOUND = 8;          // cycles after the write dph
+        integer    wi, commit_cyc, cyc, a_word;
+        reg [31:0] wr_val, a_got;
+        reg        wr_seen, stream_on;
+
+        wi         = 9;
+        wr_val     = $urandom;
+        if (wr_val === sram_ref[wi]) wr_val = wr_val ^ 32'h1;
+        commit_cyc = -1;
+        wr_seen    = 1'b0;
+        stream_on  = 1'b1;
+
+        wait_begin;
+        ahb_a_read(40 << 2);
+
+        fork
+            // Port A: fetch stream, 60 back-to-back NONSEQ reads over words
+            // 40..47, then 8 more reads of wi itself (well past the bound).
+            begin : t44_a_fetch
+                for (ii = 0; ii < 60; ii = ii+1) begin
+                    ahb_a_data(a_got);
+                    ahb_a_read((40 + ((ii+1) % 8)) << 2);
+                end
+                for (ii = 0; ii < 8; ii = ii+1) begin
+                    ahb_a_data(a_got);
+                    ahb_a_read(wi << 2);
+                end
+                // Last 8 data phases are fetches of wi: all must be fresh.
+                for (ii = 0; ii < 8; ii = ii+1) begin
+                    ahb_a_data(a_got);
+                    if (a_got !== wr_val) begin
+                        $display("ERROR [T44 A fetch of written word]: got 0x%08h, expected 0x%08h (stale)  (%0t ns)",
+                                 a_got, wr_val, $time);
+                        error = error + 1;
+                    end else if (ii == 7)
+                        $display("PASS  [T44 A fetch of written word]: 8 fetches returned 0x%08h  (%0t ns)",
+                                 a_got, $time);
+                    if (ii < 7) ahb_a_read(wi << 2);
+                end
+                #1; a_idle;
+                stream_on = 1'b0;
+            end
+            // Port B: one word write, five cycles into the stream.
+            begin : t44_b_write
+                repeat(5) @(posedge free_clk);
+                ahb_b_write(wi << 2, 3'b010, wr_val);
+                #1; b_idle;
+                // Count cycles from the end of the write data phase until the
+                // macro write strobe is seen.
+                cyc = 0;
+                while (!wr_seen && stream_on) begin
+                    @(posedge free_clk);
+                    cyc = cyc + 1;
+                    if (sram_wen_n !== 4'b1111) begin
+                        wr_seen    = 1'b1;
+                        commit_cyc = cyc;
+                    end
+                end
+            end
+        join
+
+        ref_write(wi << 2, 3'b010, wr_val);
+
+        if (!wr_seen) begin
+            $display("ERROR [T44 write commit]: write never reached the SRAM while Port A was fetching  (%0t ns)", $time);
+            error = error + 1;
+        end else if (commit_cyc > T44_COMMIT_BOUND) begin
+            $display("ERROR [T44 write commit]: write landed %0d cycles after its data phase (bound %0d)  (%0t ns)",
+                     commit_cyc, T44_COMMIT_BOUND, $time);
+            error = error + 1;
+        end else
+            $display("PASS  [T44 write commit]: write landed %0d cycle(s) after its data phase (bound %0d)  (%0t ns)",
+                     commit_cyc, T44_COMMIT_BOUND, $time);
+
+        repeat(4) @(posedge free_clk); #1;
+        ahb_b_read(wi << 2); #1; b_idle;
+        ahb_b_data(a_got);
+        chk_b(wi[MEM_ADDRW-1:0], a_got, "T44 B readback");
+
+        repeat(2) @(posedge free_clk); #1;
+        wait_check("T44", -1, -1, -1);
+    end
+
+
+    // =======================================================================
+    // T45 -- Address walk at the controller boundary
+    //
+    //       For every bit b of 2..31, with a = walking-one and z = walking-zero
+    //       haddr (then with the roles swapped):
+    //         1  Port-B word write to z in the same cycle as a Port-A read of a,
+    //            so the write data phase meets a read and is buffered;
+    //         2  pipelined Port-B write -> read of z (served from the buffer)
+    //            while Port A reads a again;
+    //         3  after the commit, Port A reads z while Port B reads a.
+    //       Every macro command must carry the full haddr[31:2] (and, for a
+    //       write, the data and four strobes) of a presented access (monitor
+    //       9e), every write reaches the macro, and every read returns the
+    //       reference word its sliced address selects.
+    // =======================================================================
+    test_title = "T45: Address walk, both ports";
+    $display("");
+    $display("================================================================");
+    $display("T45: Address walk -- walking-one / walking-zero haddr, both ports");
+    $display("================================================================");
+
+    begin : t45
+        integer    b, p, nwr;
+        reg [31:0] aa, zz, d, a_got, b_got;
+
+        nwr      = 0;
+        wk_cmds  = 0;
+        wk_wcmds = 0;
+        wk_bad   = 0;
+        wk_on    = 1'b1;
+
+        for (p = 0; p < 2; p = p+1)
+            for (b = 2; b < 32; b = b+1) begin
+                aa = (p == 0) ? (32'h1 << b) : (~(32'h1 << b) & 32'hFFFF_FFFC);
+                zz = (p == 0) ? (~(32'h1 << b) & 32'hFFFF_FFFC) : (32'h1 << b);
+
+                // 1: B write || A read
+                d = $urandom;
+                wk_note(aa);
+                wk_note_wr(zz, d);
+                ref_write(zz, 3'b010, d);
+                fork
+                    begin ahb_b_write(zz, 3'b010, d); #1; b_idle; end
+                    begin ahb_a_read(aa); #1; a_idle; ahb_a_data(a_got); chk_a(aa[MEM_ADDRW+1:2], a_got, "T45 A walk read"); end
+                join
+                nwr = nwr + 1;
+
+                // 2: pipelined B write -> read of the same word || A read
+                d = $urandom;
+                wk_note(aa);
+                wk_note(zz);
+                wk_note_wr(zz, d);
+                fork
+                    begin
+                        #1;
+                        m1_hsel   = 1'b1;
+                        m1_htrans = 2'b10;
+                        m1_haddr  = zz;
+                        m1_hwrite = 1'b1;
+                        m1_hsize  = 3'b010;
+                        @(posedge free_clk);
+                        while (!m1_hready) @(posedge free_clk);
+                        #1;
+                        m1_hwdata = d;
+                        m1_htrans = 2'b10;
+                        m1_haddr  = zz;
+                        m1_hwrite = 1'b0;
+                        @(posedge free_clk);
+                        while (!m1_hready) @(posedge free_clk);
+                        #1;
+                        m1_hsel   = 1'b0;
+                        m1_htrans = 2'b00;
+                        m1_hwdata = 32'b0;
+                        @(posedge free_clk);
+                        while (!m1_hready) @(posedge free_clk);
+                        b_got = m1_hrdata;
+                        ref_write(zz, 3'b010, d);
+                        chk_b(zz[MEM_ADDRW+1:2], b_got, "T45 B write->read walk");
+                    end
+                    begin ahb_a_read(aa); #1; a_idle; ahb_a_data(a_got); chk_a(aa[MEM_ADDRW+1:2], a_got, "T45 A walk read"); end
+                join
+                #1; b_idle;
+                nwr = nwr + 1;
+
+                // 3: both ports read after the commit
+                repeat(3) @(posedge free_clk);
+                wk_note(zz);
+                wk_note(aa);
+                fork
+                    begin ahb_a_read(zz); #1; a_idle; ahb_a_data(a_got); chk_a(zz[MEM_ADDRW+1:2], a_got, "T45 A reads the written word"); end
+                    begin ahb_b_read(aa); #1; b_idle; ahb_b_data(b_got); chk_b(aa[MEM_ADDRW+1:2], b_got, "T45 B walk read"); end
+                join
+            end
+
+        repeat(3) @(posedge free_clk); #1;
+        wk_on = 1'b0;
+        if (wk_wcmds < nwr) begin
+            $display("ERROR [T45]: %0d SRAM write commands for %0d walking writes  (%0t ns)", wk_wcmds, nwr, $time);
+            error = error + 1;
+        end else if (wk_bad == 0)
+            $display("PASS  [T45]: %0d walking writes, %0d write / %0d read commands, every one at a presented haddr[31:2]  (%0t ns)",
+                     nwr, wk_wcmds, wk_cmds, $time);
+    end
+
+    // =======================================================================
     // END OF TEST
     // =======================================================================
     repeat(4) @(posedge free_clk);
@@ -3364,5 +3737,16 @@ initial begin : main_stim
     $finish;
 
 end // initial
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once reset is released: the Verilator coverage flow starts
+// every flop at 1 so the asynchronous resets see an edge, and the reset driving them
+// to 0 would otherwise count as a toggle of every bit.
+initial begin
+    wait (hresetn === 1'b0);
+    @(posedge hresetn);
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 endmodule // tb_ahb_fused_sram_ctrl

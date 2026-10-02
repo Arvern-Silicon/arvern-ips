@@ -21,9 +21,15 @@
 //   * Port A (instruction fetch) is read-only and always 32-bit. `a_hsize_i`
 //     and the low 2 bits of `a_haddr_i` are intentionally unused.
 //   * Port B (data) supports byte / halfword / word reads and writes via
-//     `b_hsize_i` and the byte-strobe logic (`sram_wen_o`).
+//     `b_hsize_i` and the byte-strobe logic (`sram_wen_o`). `b_hsize_i[2]`
+//     is ignored and `b_hsize_i[1:0] = 2'b11` (64-bit) produces no byte
+//     strobe: sizes above 32 bits are not checked, as documented for the
+//     standalone `ahb_sram_controller`.
 //   * Coherency between Port A and Port B is the master's responsibility
 //     (FENCE.I or equivalent) — Port A bypasses the RPW forwarding path.
+//     A Port-B write reaches the macro at most one cycle after its data
+//     phase, whatever the traffic on either port (see arb_request): a
+//     Port-A fetch issued after the write's data phase always sees it.
 //----------------------------------------------------------------------------
 `default_nettype none
 
@@ -76,7 +82,20 @@ module  ahb_fused_sram_ctrl #(
 // 0)  INTERNAL BUS (manager-mux output / sram-controller input)
 //=============================================================================
 
-wire        bus_hready_to_sub;
+// SRAM controller FSM state (section 5). Declared here because the arbiter
+// (section 3) holds both ports off while a paused write is parked.
+localparam IDLE               = 3'b000;
+localparam READ               = 3'b010;
+localparam READ_PENDING_WRITE = 3'b011;
+localparam WRITE              = 3'b100;
+
+localparam RPW_BIT            = 0;
+localparam READ_BIT           = 1;
+localparam WRITE_BIT          = 2;
+
+wire [2:0] state;
+reg  [2:0] state_nxt;
+
 wire [31:0] bus_hrdata;
 wire  [1:0] bus_htrans;
 wire [31:0] bus_hwdata;
@@ -104,7 +123,6 @@ wire  [1:0] m0_htrans_cache;
 wire [31:0] m0_haddr_to_sub;
 wire  [1:0] m0_htrans_to_sub;
 wire        m0_hsel_to_sub;
-wire        m0_hready_to_sub;
 wire        m0_hclk_en;
 
 // Address-phase detection
@@ -157,7 +175,6 @@ assign a_hresp_o        = 1'b0;
 assign m0_haddr_to_sub  = m0_aph_pending ? m0_haddr_cache  : a_haddr_i ;
 assign m0_htrans_to_sub = m0_aph_pending ? m0_htrans_cache : a_htrans_i;
 assign m0_hsel_to_sub   = m0_grant; // grant implies (m_aph_valid | m_aph_pending)
-assign m0_hready_to_sub = a_hready_i | ~m0_aph_immediate_granted;
 
 // Per-port clock enable
 assign m0_hclk_en       = m0_latch_aph             | m0_aph_pending         |
@@ -190,7 +207,6 @@ wire  [1:0] m1_htrans_to_sub;
 wire [31:0] m1_hwdata_to_sub;
 wire        m1_hwrite_to_sub;
 wire        m1_hsel_to_sub;
-wire        m1_hready_to_sub;
 wire        m1_hclk_en;
 
 assign m1_aph_valid             =  b_hsel_i & b_hready_i & b_htrans_i[1];
@@ -247,7 +263,6 @@ assign m1_htrans_to_sub = m1_aph_pending ? m1_htrans_cache : b_htrans_i;
 assign m1_hwrite_to_sub = m1_aph_pending ? m1_hwrite_cache : b_hwrite_i;
 assign m1_hwdata_to_sub = b_hwdata_i & {32{m1_dph_ongoing}};
 assign m1_hsel_to_sub   = m1_grant;
-assign m1_hready_to_sub = b_hready_i | ~m1_aph_immediate_granted;
 
 assign m1_hclk_en       = m1_latch_aph             | m1_aph_pending         |
                           m1_aph_immediate_granted | m1_aph_delayed_granted |
@@ -259,15 +274,24 @@ assign m1_hclk_en       = m1_latch_aph             | m1_aph_pending         |
 //=============================================================================
 //
 // FIXED_B_PRIO=0 — Toggle priority (1:1 fairness, default).
-// FIXED_B_PRIO=1 — Fixed Port-B priority: arb_grant[1] = m1_request, which
-//                   has no a_hsel_i fan-in. The downstream sram_addr_internal
-//                   mux therefore sees an a_hsel_i-free select.
+// FIXED_B_PRIO=1 — Fixed Port-B priority: arb_grant[1] = m1_request (gated by
+//                   the parked-write hold, a flop), which has no a_hsel_i
+//                   fan-in. The downstream sram_addr_internal mux therefore
+//                   sees an a_hsel_i-free select.
 //
 
 wire  [1:0] arb_request;
 wire  [1:0] arb_grant;
 
-assign arb_request = {m1_request, m0_request};
+// A write whose data phase collided with a read is parked in the pause
+// buffer (READ_PENDING_WRITE). It is restored in the first cycle with no
+// read on the macro; to bound that to ONE cycle, neither port is granted
+// while the parked write waits. A read or write address phase arriving in
+// that cycle is cached by its manager interface and replayed one cycle
+// later (one wait state per parked write). Without this, a back-to-back
+// fetch stream on Port A keeps the write parked indefinitely and fetches
+// the stale word (Port A has no pause-buffer forwarding).
+assign arb_request = {m1_request, m0_request} & {2{~state[RPW_BIT]}};
 
 generate
 if (FIXED_B_PRIO) begin : gen_arb_fixed
@@ -307,24 +331,11 @@ assign bus_hwdata       =                     m1_hwdata_to_sub;
 
 // Structural signals
 assign bus_hsel         =  m0_hsel_to_sub   | m1_hsel_to_sub;
-assign bus_hready_to_sub=  m0_hready_to_sub & m1_hready_to_sub;
 
 
 //=============================================================================
 // 5)  SRAM CONTROLLER  (FSM, write buffer, hwdata pause / RPW forwarding)
 //=============================================================================
-
-localparam IDLE               = 3'b000;
-localparam READ               = 3'b010;
-localparam READ_PENDING_WRITE = 3'b011;
-localparam WRITE              = 3'b100;
-
-localparam RPW_BIT            = 0;
-localparam READ_BIT           = 1;
-localparam WRITE_BIT          = 2;
-
-wire           [2:0] state;
-reg            [2:0] state_nxt;
 
 wire                 sub_aph_valid;
 wire                 sub_aph_write;
@@ -348,8 +359,10 @@ wire           [3:0] sram_wr_en_nxt;
 
 wire [29:0] sram_addr_internal;
 
-// Detect valid AHB transaction
-assign sub_aph_valid    = bus_hsel & bus_hready_to_sub & bus_htrans[1];
+// Detect valid AHB transaction. No hready term: a port is granted (bus_hsel)
+// only for an address phase that is valid on its own bus, so the internal bus
+// is always "ready" when hsel is high.
+assign sub_aph_valid    = bus_hsel & bus_htrans[1];
 assign sub_aph_write    = sub_aph_valid &  bus_hwrite;
 assign sub_aph_read     = sub_aph_valid & ~bus_hwrite;
 
@@ -421,8 +434,11 @@ assign sram_wen_o     = ~(sram_wr_en_buf & {4{sram_wr_active}});
 assign sram_din_o     = (bus_hwdata    & {32{sram_wr_cmd & ~sram_wr_pause}}) |
                         (hwdata_pause  & {32{sram_wr_restore             }}) ;
 
-// Read-from-pause forwarding. Qualified with arb_grant[1] so the 30-bit
-// comparator stays off the M0 critical path (M0 never needs RPW per FENCE.I).
+// Read-from-pause forwarding, for the Port-B read that collided with the
+// write's data phase (the only read that can see the parked write, since
+// the parked write is restored one cycle later). Qualified with arb_grant[1]
+// so the 30-bit comparator stays off the M0 critical path; a Port-A read in
+// that same cycle gets the pre-write word, which is the FENCE.I contract.
 assign sram_read_from_pause = arb_grant[1] & sram_rd_cmd & state_nxt[RPW_BIT] & (sram_wr_addr_buf == m1_haddr_to_sub[31:2]);
 
 // Registered read-data select strobes (unconditional next-state: en=1).

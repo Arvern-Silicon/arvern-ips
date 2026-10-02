@@ -37,7 +37,7 @@ filesets:
       - rtl/verilog/ahb_interconnect_hiperf.v
       - rtl/verilog/ahb_interconnect_fused.v
     depend:
-      - arvern:ips:arv_common:1.0
+      - arvern:ips:arv_primitives:1.0
 
 targets:
   default: &default

@@ -1,0 +1,24 @@
+{signal: [
+  {name: 'scl_i',        wave: 'nnnnnnnnn0n'},
+  {name: 'sda_i',        wave: '01101001010'},
+  {},
+  {name: 'field',        wave: '44444444535',
+   data: ['d7','d6','d5','d4','d3','d2','d1','d0','ACK','stretch','d7']},
+  {name: 'state',        wave: '3.......453',
+   data: ['ST_READ', 'ACK', 'LOAD', 'ST_READ']},
+  {name: 'SDA owner',    wave: '3.......43.',
+   data: ['TARGET', 'MASTER', 'TARGET']},
+  {},
+  {name: 'bus_listen',   wave: '0..........'},
+  {name: 'start_listen', wave: '1.......01.'}
+],
+  head: {text: 'Inside a read: STOP masked throughout, START qualified by whoever owns SDA'},
+  // Multi-line foot: WaveDrom draws foot.text as ONE SVG line, so a second line is
+  // an explicit tspan. x must equal the diagram's centre (text-anchor is "middle") --
+  // 440 at this width; re-check it if the slot count or hscale changes. Only about
+  // two lines fit: the canvas height does not grow for extra tspans.
+  foot: {text: ['tspan',
+    'Every SDA edge above sits on an SCL falling edge - none of them is a delimiter.',
+    ['tspan', {x: 440, dy: 14}, 'STOP is an SDA RISE and a read is full of those, so it is masked; START is an SDA FALL.']]},
+  config: {hscale: 2}
+}

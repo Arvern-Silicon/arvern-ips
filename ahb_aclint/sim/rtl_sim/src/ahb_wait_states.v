@@ -10,13 +10,20 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : ahb_wait_states
-// Module Description : Inject fabric wait states (hready_i held low by the
-//                      interconnect) around AHB accesses and verify the DUT
-//                      holds the address phase and completes the transfer with
-//                      correct data. The standard BFM never drives hready_i=0
-//                      on a normal access, so aph_valid's hready_i gating and
-//                      the data-phase-extend behavior were unstimulated.
-//                      Stall is injected via tb_force_stall (see tb).
+// Module Description : Force hready_i low around AHB accesses and verify the
+//                      DUT holds the address phase and completes the transfer
+//                      with correct data, committing exactly once. The standard
+//                      BFM never drives hready_i=0 on a normal access, so this
+//                      is what stimulates aph_valid's hready_i gating and the
+//                      data-phase extension. Stall is injected via
+//                      tb_force_stall (see tb), which masks the DUT's own
+//                      hreadyout_o.
+//
+//                      This stimulus is OFF-SPEC for AHB-Lite: it holds
+//                      hready_i low during the DUT's OWN data phase while its
+//                      hreadyout_o is high, which a compliant interconnect never
+//                      does (the selected slave's HREADYOUT is HREADY). It is
+//                      accepted and exercised on purpose, as a robustness check.
 //----------------------------------------------------------------------------
 
 reg wait_seen;

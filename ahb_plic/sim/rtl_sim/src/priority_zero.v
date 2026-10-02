@@ -11,12 +11,9 @@
 //----------------------------------------------------------------------------
 // File Name          : priority_zero
 // Module Description : Priority 0 = "never interrupt" (RISC-V PLIC 1.0 Ch.4).
-//                      The `prio != 0` term (plic_target.v:139) gates BOTH the
-//                      irq and the claim winner. No existing test leaves a
-//                      pending+enabled source at priority 0 and checks it stays
-//                      quiet -- every test writes a non-zero priority first. A
-//                      bug that let priority-0 sources qualify would pass the
-//                      whole suite. This exercises that dedicated term.
+//                      The prio != 0 term in plic_target gates BOTH the irq and the
+//                      claim winner. A pending+enabled source left at priority 0
+//                      must stay quiet; a bug that let it qualify is caught here.
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE     32'h00400000

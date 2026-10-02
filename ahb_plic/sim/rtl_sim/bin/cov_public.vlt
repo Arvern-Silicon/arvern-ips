@@ -1,0 +1,19 @@
+`verilator_config
+// Internal DUT nets the bench monitors, scoreboard and tests read by hierarchical
+// reference: Verilator may otherwise optimise them and a timed monitor then sees a
+// stale value.
+public_flat_rw -module "ahb_plic" -var "priority_flat"
+public_flat_rw -module "ahb_plic" -var "pending_flat"
+public_flat_rw -module "ahb_plic" -var "in_service_flat"
+public_flat_rw -module "ahb_plic" -var "enable_flat"
+public_flat_rw -module "ahb_plic" -var "tgt_top_id"
+public_flat_rw -module "ahb_plic" -var "tgt_irq"
+public_flat_rw -module "ahb_plic" -var "tgt_claim_p"
+public_flat_rw -module "ahb_plic" -var "tgt_compl_p"
+public_flat_rw -module "ahb_plic" -var "dph_valid"
+public_flat_rw -module "ahb_plic" -var "dph_size"
+public_flat_rw -module "plic_pending" -var "in_service"
+public_flat_rw -module "plic_target" -var "threshold"
+// Bench/test variables shared between processes: without this Verilator may hand a
+// monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_ahb_plic" -var "*"

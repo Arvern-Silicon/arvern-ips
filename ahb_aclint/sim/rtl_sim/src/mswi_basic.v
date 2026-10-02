@@ -62,6 +62,24 @@ initial
       end
       ahb_read(1, MACHINE, 32'h00400000, 32'h00000001, 2, 1, OK);
 
+      // The complement of the case above: only bit[0] decides, so a write with
+      // every OTHER bit set must still CLEAR the interrupt. A mask applied to
+      // the write data rather than a bit[0] select would leave it asserted.
+      ahb_write(1, MACHINE, 32'h00400000, 32'hFFFFFFFE, 2, OK);
+      repeat(2) @(posedge free_clk);
+      if (tb_ahb_aclint.dut.irq_m_software_o !== 1'b0) begin
+         $display("ERROR: irq_m_software_o expected 0 after MSIP[0]=0xFFFFFFFE -- got %b %t ns",
+                  tb_ahb_aclint.dut.irq_m_software_o, $time);
+         error = error + 1;
+      end else begin
+         $display("PASS:  irq_m_software_o == 0 after MSIP[0]=0xFFFFFFFE (only bit[0] decides) %t ns", $time);
+      end
+      ahb_read(1, MACHINE, 32'h00400000, 32'h00000000, 2, 1, OK);
+
+      // Restore the asserted state the rest of this test expects.
+      ahb_write(1, MACHINE, 32'h00400000, 32'hFFFFFFFF, 2, OK);
+      repeat(2) @(posedge free_clk);
+
       // Out-of-window MSIP read (NUM_HARTS=1 - 0x0004 is reserved RAZ/WI).
       ahb_read(1, MACHINE, 32'h00400004, 32'h00000000, 2, 1, OK);
 

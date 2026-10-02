@@ -15,6 +15,7 @@
 
 integer ii;
 integer jj;
+integer kk;
 
 // Arbitration scheme verification (Phase 2): timestamps captured when each
 // contending master completes its data phase.  The ordering between m0 and
@@ -110,12 +111,52 @@ initial
       join
       repeat(10) @(posedge free_clk);
 
-      // NOTE: A back-to-back pipelined phase (hbusreq=0 on M0 + M1 + M2) is
-      // intentionally NOT included.  When M0 streams Port-A reads against
-      // sustained Port-B writes, the fused FSM hangs (Port-A SRAM read
-      // starvation).  This matches the V2 review finding H-1 -- 'force_drain'
-      // missing the '~post_read' guard.  Re-enable a pipelined section once
-      // that fix lands.
+      //---------------------------------------------------------------
+      // Back-to-back pipelined contention.
+      //
+      // The spaced phase above never makes the two SRAM ports contend: 15
+      // idle cycles between transfers means each is served alone. This phase
+      // removes the gaps so Port A (the executable manager streaming reads)
+      // and Port B (non-executable writes) contend on the fused SRAM every
+      // cycle, which is the only way the arbiter's fairness and the write
+      // buffer's parked-write path are exercised at all.
+      //
+      // M0 reads a SRAM region that M1 and M2 never write, so the data is
+      // predictable under arbitrary interleaving and can be checked; M1 and
+      // M2 write disjoint regions.
+      //---------------------------------------------------------------
+      $display("Pipelined Port-A vs Port-B contention");
+
+      for (ii = 0; ii < 8; ii = ii + 1)
+         ahb_write(1, 1, 32'h00401100 + (ii*4), 32'h5EED0000 + ii, 2);
+      repeat(20) @(posedge free_clk);
+
+      fork
+         begin                                                     // M0 -- Port A, streaming reads, no gaps
+            for (ii = 0; ii < 8; ii = ii + 1)
+               ahb_read(0, 0, 32'h00401100 + (ii*4), 32'h5EED0000 + ii, 2, 1);
+         end
+         begin                                                     // M1 -- Port B, streaming writes
+            for (jj = 0; jj < 8; jj = jj + 1)
+               ahb_write(1, 0, 32'h00401200 + (jj*4), 32'hB0000000 + jj, 2);
+         end
+         begin                                                     // M2 -- Port B, streaming writes
+            for (kk = 0; kk < 8; kk = kk + 1)
+               ahb_write(2, 0, 32'h00401300 + (kk*4), 32'hC0000000 + kk, 2);
+         end
+      join
+
+      repeat(30) @(posedge free_clk);
+
+      // Both write streams must have committed, and Port A's reads above were
+      // checked inline: if the arbiter had starved either side this would have
+      // hung rather than reached here.
+      for (jj = 0; jj < 8; jj = jj + 1)
+         ahb_read(1, 1, 32'h00401200 + (jj*4), 32'hB0000000 + jj, 2, 1);
+      for (kk = 0; kk < 8; kk = kk + 1)
+         ahb_read(2, 1, 32'h00401300 + (kk*4), 32'hC0000000 + kk, 2, 1);
+
+      $display("PASS:  pipelined contention -- both ports progressed, all data correct");
 
       //---------------------------------------------------------------
       // ARBITRATION SCHEME VERIFICATION

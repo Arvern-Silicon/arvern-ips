@@ -1,0 +1,15 @@
+{signal: [
+  {name: 'tck_i', wave: 'nnnnnnnnnnnnnn'},
+  {name: 'tms_i', wave: '10000000001100'},
+  {name: 'tdi_i', wave: 'xxx22222222xxx',
+   data: ['d0','d1','d2','d3','d4','d5','d6','d7']},
+  {name: 'tdo_o', wave: 'zzz33333333zzz',
+   data: ['q0','q1','q2','q3','q4','q5','q6','q7']},
+  {},
+  {name: 'TAP state', wave: '5436.......435',
+   data: ['RTI','Select-DR','Capture-DR','Shift-DR','Exit1-DR','Update-DR','RTI']}
+],
+  head: {text: 'A DR scan: TMS walks the TAP through Capture-DR, Shift-DR (N bits), Update-DR'},
+  foot: {text: 'TMS sampled on rising TCK selects the next state; TDO launched on falling TCK, driven (tdo_oe) only while shifting. Shift is LSB-first.'},
+  config: {hscale: 2}
+}

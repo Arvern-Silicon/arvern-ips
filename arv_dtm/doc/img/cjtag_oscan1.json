@@ -1,0 +1,19 @@
+{signal: [
+  {name: 'TCKC',          wave: '0.1.0.1.0.1.'},
+  {},
+  {name: 'TMSC (probe)',  wave: '3...4...z...',
+   data: ['~TDI','TMS']},
+  {name: 'TMSC (target)', wave: 'z.......5...',
+   data: ['TDO']},
+  {},
+  {name: 'cnt',           wave: '3...4...5...',
+   data: ['0 nTDI','1 TMS','2 TDO']},
+  {name: 'tmsc_oe_o',     wave: '0.......1.0.'},
+  {name: 'v_tck',         wave: '0.........1.'}
+],
+  head: {text: 'OScan1 scan packet - one JTAG bit per THREE TCKC cycles'},
+  foot: {text: ['tspan',
+    'Probe drives phases 1-2 while TCKC is low; target drives phase 3. A bus keeper holds the',
+    ['tspan', {x: 480, dy: 14}, 'level while TCKC is high, so the far side samples on the rising edge. v_tck pulses once per packet, in the TDO cycle, with TMS/TDI already stable.']]},
+  config: {hscale: 2}
+}

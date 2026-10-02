@@ -11,13 +11,6 @@
 //----------------------------------------------------------------------------
 // File Name          : ahb_manager_if.v
 // Module Description : AHB manager interface (per-master front-end into the interconnect).
-//
-// LOOPBACK CONTRACT: `m_hready_i` (input) is expected to be wired to this
-// instance's own `m_hreadyout_o` (output) at the next hierarchy level — see
-// `ahb_manager_mux` / `ahb_interconnect_*`. The module is carefully written
-// so that no combinational path inside it goes from `m_hready_i` back to
-// `m_hreadyout_o`; the external loopback is therefore safe. Any future
-// modification that closes such a path will create a combinational loop.
 //----------------------------------------------------------------------------
 `default_nettype none
 
@@ -65,7 +58,6 @@ module  ahb_manager_if #(
     output wire          [3:0] hmaster_o,
     output wire                hmastlock_o,
     output wire          [3:0] hprot_o,
-    output wire                hready_o,
     output wire                hsel_o,
     output wire          [2:0] hsize_o,
     output wire          [1:0] htrans_o,
@@ -104,8 +96,11 @@ wire                  m_hwrite_cache;
 // Detect last cycle of the address phase from manager
 assign m_aph_valid        =  m_hsel_i & m_hready_i & m_htrans_i[1];
 
+// A grant only counts while the bus can accept an address phase
+wire   m_grant_eff        =  m_grant_i & hreadyout_i;
+
 // We latch the address phase if the bus is not free
-assign latch_m_aph        =  m_aph_valid & ~m_grant_i;
+assign latch_m_aph        =  m_aph_valid & ~m_grant_eff;
 
 // set on latch_m_aph (priority), clear on delayed grant, hold otherwise
 arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_m_aph_pending (
@@ -117,8 +112,8 @@ arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_m_aph_pending (
 assign m_request_o             = (m_aph_valid | m_aph_pending) & hreadyout_i;
 
 // Detect if address phase from manager is immediately granted or delayed granted
-assign m_aph_immediate_granted =  m_aph_valid   & m_grant_i;
-assign m_aph_delayed_granted   =  m_aph_pending & m_grant_i;
+assign m_aph_immediate_granted =  m_aph_valid   & m_grant_eff;
+assign m_aph_delayed_granted   =  m_aph_pending & m_grant_eff;
 assign m_aph_granted           =  m_aph_immediate_granted | m_aph_delayed_granted;
 
 // Data phase detection
@@ -188,21 +183,14 @@ assign hsize_o       = m_aph_pending ? m_hsize_cache     : m_hsize_i    ;
 assign hauser_o      = m_aph_pending ? m_hauser_cache    : m_hauser_i   ;
 assign htrans_o      = m_aph_pending ? m_htrans_cache    : m_htrans_i   ;
 assign hwrite_o      = m_aph_pending ? m_hwrite_cache    : m_hwrite_i   ;
-assign hsel_o        = m_grant_i; // grant implies (m_aph_valid | m_aph_pending)
-
-// HREADY signal to subordinates.
-// Non-active managers drive hready_o=1 so the AND-reduce in ahb_manager_mux
-// (line `assign hready_o = &hready_int;`) is governed by the active manager's
-// m_hready_i alone.
-assign hready_o      =  m_hready_i    | ~m_aph_immediate_granted;
+assign hsel_o        = m_aph_granted; // only a granted address phase selects a subordinate (a parked grant does not)
 
 
 // Data phase signals to subordinates
 assign hwdata_o      =  m_hwdata_i    & {32{m_dph_ongoing}};
 
-// Clock enable signal
-assign hclk_en_o     = latch_m_aph             | m_aph_pending         |
-                       m_aph_immediate_granted | m_aph_delayed_granted | m_dph_ongoing ;
+// Clock enable signal: any address phase presented, cached or being served.
+assign hclk_en_o     = m_aph_valid | m_aph_pending | m_dph_ongoing;
 
 
 endmodule // ahb_manager_if

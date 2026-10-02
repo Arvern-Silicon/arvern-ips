@@ -11,9 +11,9 @@
 //----------------------------------------------------------------------------
 // File Name          : mtimer_atomic_read.v
 // Module Description : Exercise the canonical RISC-V 64-on-32 MTIME read
-//                      pattern: MTIME_LO triggers the CDC roundtrip and
-//                      captures a coherent 64-bit snapshot; the subsequent
-//                      MTIME_HI returns the buffered upper half (no CDC).
+//                      pattern: MTIME_LO returns the lower half of the mirror
+//                      and latches its upper half; the subsequent MTIME_HI
+//                      returns that latched half.
 //                      Verify that two LO+HI pairs are monotonically
 //                      non-decreasing.
 //----------------------------------------------------------------------------
@@ -38,25 +38,25 @@ initial
       // hard-check the value - the contract only forbids assuming it
       // is fresh.
       hi_first_shadow = tb_ahb_aclint.mtime_shadow_ahb_sim;
-      ahb_read(1, MACHINE, 32'h0040400C, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFFC, 32'h00000000, 2, 0, OK);
       $display("INFO:  pre-LO mtime_shadow snapshot = 0x%h %t ns",
                hi_first_shadow, $time);
 
-      // First snapshot: LO triggers a roundtrip, then probe the full 64-bit
+      // First snapshot: LO latches the upper half, then probe the full 64-bit
       // mtime_shadow (stable across the AHB read). HI access is verified
       // via a separate read after.
-      ahb_read(1, MACHINE, 32'h00404008, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFF8, 32'h00000000, 2, 0, OK);
       t0 = tb_ahb_aclint.mtime_shadow_ahb_sim;
-      ahb_read(1, MACHINE, 32'h0040400C, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFFC, 32'h00000000, 2, 0, OK);
       $display("INFO:  t0 = 0x%h_%h %t ns", t0[63:32], t0[31:0], $time);
 
       // Let MTIME advance a few LF ticks.
       repeat(200) @(posedge free_clk);
 
       // Second snapshot.
-      ahb_read(1, MACHINE, 32'h00404008, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFF8, 32'h00000000, 2, 0, OK);
       t1 = tb_ahb_aclint.mtime_shadow_ahb_sim;
-      ahb_read(1, MACHINE, 32'h0040400C, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFFC, 32'h00000000, 2, 0, OK);
       $display("INFO:  t1 = 0x%h_%h %t ns", t1[63:32], t1[31:0], $time);
 
       // 64-bit monotonicity check.

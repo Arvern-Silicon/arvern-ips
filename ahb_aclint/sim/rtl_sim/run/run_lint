@@ -12,6 +12,9 @@ if [ "$1" = "-sweep" ]; then
     exec ../bin/run_lint_sweep.py
 fi
 
+# The FuseSoC manifest must list exactly the files of filelist.f (the native
+# flows never read the manifest, so only this check notices when it drifts).
+../bin/check_core_manifest.py || exit 1
 ../bin/flatten_filelist.py ../../../rtl/verilog/filelist.f submit_lint.f
 
-verilator --lint-only -Wall -Wpedantic waivers.vlt -f submit_lint.f
+verilator --lint-only --top ahb_aclint -Wall -Wpedantic waivers.vlt -f submit_lint.f

@@ -103,6 +103,15 @@ if {$WITH_DC_ULTRA} {
 #=============================================================================#
 #                                DFT Insertion                                #
 #=============================================================================#
+# A configuration without registers (every NR_*_RW = 0) has nothing to scan:
+# the test clock and reset would capture nothing (D8), so DFT is skipped.
+if {$WITH_DFT && [sizeof_collection [all_registers]] == 0} {
+    set fh [open ./results/report.dft_drc w]
+    puts $fh "No registers in the design: DFT insertion skipped."
+    puts $fh "  Total violations: 0"
+    close $fh
+    set WITH_DFT 0
+}
 if {$WITH_DFT} {
 
     # DFT Signal Type Definitions
@@ -111,7 +120,19 @@ if {$WITH_DFT} {
     #set_dft_signal -view spec         -type Constant    -port scan_mode_i   -active_state 1
     #set_dft_signal -view existing_dft -type Constant    -port scan_mode_i   -active_state 1
     set_dft_signal -view existing_dft -type ScanClock   -port hclk_i        -timing [list 45 55]
-    set_dft_signal -view existing_dft -type Reset       -port hresetn_i     -active 0
+
+    # RESET STYLE. With ASYNC_RST_EN=1 the reset drives real async reset pins and
+    # is declared Reset. With ASYNC_RST_EN=0 it reaches the flops through the
+    # D-side mux: declared Reset, DRC would treat it as a clock feeding data pins
+    # (D10). Hold it inactive as a test-mode constant instead.
+    set ASYNC_RST_MODE [expr {![info exists RTL_PARAM_ASYNC_RST_EN] || $RTL_PARAM_ASYNC_RST_EN}]
+    if {$ASYNC_RST_MODE} {
+        set_dft_signal -view existing_dft -type Reset    -port hresetn_i   -active 0
+    } else {
+        set_dft_signal -view spec         -type Constant -port hresetn_i   -active_state 1
+        set_dft_signal -view existing_dft -type Constant -port hresetn_i   -active_state 1
+    }
+
 
     # DFT Configuration
     set_dft_insertion_configuration -preserve_design_name true

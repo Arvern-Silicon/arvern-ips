@@ -1,0 +1,6 @@
+`verilator_config
+// Internal DUT net a test forces by hierarchical reference (illegal_state), and the
+// bench/test variables shared between processes: without this Verilator may optimise
+// the net or hand a monitor a stale copy of a flag another process set.
+public_flat_rw -module "arv_ipdff" -var "q_o"
+public_flat_rw -module "tb_ahb_sram_controller" -var "*"

@@ -11,16 +11,16 @@
 //----------------------------------------------------------------------------
 // File Name          : scoreboard.v
 // Module Description : Always-on passive output monitor, `included into
-//                      tb_ahb_aclint. It observes DUT outputs that were
-//                      previously left dangling and enforces continuous
-//                      invariants regardless of which stimulus is running.
+//                      tb_ahb_aclint. It observes DUT outputs continuously
+//                      and enforces invariants regardless of which stimulus
+//                      is running.
 //                      All checks sample free_clk (the ungated reference) so
 //                      they still fire even if hclk_i is frozen, and all
 //                      increment the shared `error` counter.
 //
 //                      Invariants:
-//                        SC1  time_gnt_o  => hclk_en_o   (the clock-gate bug:
-//                             on the grant cycle time_gnt_r is the sole term
+//                        SC1  time_gnt_o  => hclk_en_o   (on the grant
+//                             cycle time_gnt_r is the sole term
 //                             holding mtimer_active_o/hclk_en_o high; if that
 //                             term is missing the gate drops while time_gnt is
 //                             high -- caught here continuously).
@@ -82,9 +82,9 @@ always @(negedge free_clk) if (sb_active) begin
 end
 
 //----------------------------------------------------------------------------
-// SC4 : no DUT output may be X after the monitor is armed. (^bus === x) is 1
-// iff any bit of the bus is X. Catches uninitialised flops / X-propagation
-// that "passed" before because nobody read these outputs.
+// SC4 : none of the DUT outputs below may be X after the monitor is armed.
+// (^bus === x) is 1 iff any bit of the bus is X. Catches uninitialised flops /
+// X-propagation on outputs that a test may never read.
 //----------------------------------------------------------------------------
 always @(negedge free_clk) if (sb_active) begin
    if ( (^irq_m_software === 1'bx) ||
@@ -104,10 +104,10 @@ always @(negedge free_clk) if (sb_active) begin
 end
 
 //----------------------------------------------------------------------------
-// SC5 : observability / wiring of the two outputs the original escape left
-// dangling. time_val_o is the registered Zicntr shadow; mtimer_wake_lf_o is
-// the raw LF comparator level. Mismatches here flag a future re-wire/refactor
-// and keep both ports continuously read (no longer dangling).
+// SC5 : observability / wiring of time_val_o and mtimer_wake_lf_o.
+// time_val_o is the registered Zicntr shadow;
+// mtimer_wake_lf_o is the raw LF comparator level. Mismatches flag a re-wire,
+// and the check keeps both ports continuously read.
 //----------------------------------------------------------------------------
 always @(negedge free_clk) if (sb_active) begin
    if (time_val !== tb_ahb_aclint.dut.u_mtimer.mtime_shadow_zicntr) begin
@@ -115,9 +115,13 @@ always @(negedge free_clk) if (sb_active) begin
                time_val, tb_ahb_aclint.dut.u_mtimer.mtime_shadow_zicntr, $time);
       error = error + 1;
    end
-   if (mtimer_wake_lf !== tb_ahb_aclint.dut.u_mtimer.irq_m_timer_lf) begin
-      $display("ERROR: SCOREBOARD SC5 -- mtimer_wake_lf_o %b != internal irq_m_timer_lf %b %t ns",
-               mtimer_wake_lf, tb_ahb_aclint.dut.u_mtimer.irq_m_timer_lf, $time);
+   // mtimer_wake_lf_o is a SINGLE BIT: the OR across harts. The consumer is a
+   // power controller restarting the main oscillator, which is system-wide and
+   // has no use for a hart index -- that is carried by irq_m_timer_o[] once the
+   // clock is back. Check the reduction, not per-hart equality.
+   if (mtimer_wake_lf !== (|tb_ahb_aclint.dut.u_mtimer.wake_lf)) begin
+      $display("ERROR: SCOREBOARD SC5 -- mtimer_wake_lf_o %b != OR of internal wake_lf %b %t ns",
+               mtimer_wake_lf, tb_ahb_aclint.dut.u_mtimer.wake_lf, $time);
       error = error + 1;
    end
 end
@@ -130,3 +134,26 @@ task scoreboard_report;
       $display("SCOREBOARD: %0d passive checks executed (SC1/SC2/SC3 clock-gate, SC4 X-prop, SC5 wiring)", sb_checks);
    end
 endtask
+
+// SC6 -- LIVENESS OF THE OSCILLATOR-ENABLE CONTRACT. The IP holds hclk_en_o
+// while an AHB transfer or a time request is in flight, and the doc requires
+// the oscillator controller to keep hclk_aon_i running while hclk_en_o (or any
+// other IP's request) is high. If the controller ignores that -- or the SoC
+// ties hclk_aon_en_i low -- an MTIME read stalls forever and csrr time never
+// grants: a silicon hang no value check can see, because nothing advances.
+// Counted on clk_lf so the check survives a stopped hclk_aon: two full LF
+// periods of "transfer or time request pending, clock reported gone" is
+// beyond any legitimate wake latency.
+integer sb_aon_gone_lf;
+initial sb_aon_gone_lf = 0;
+always @(posedge clk_lf) if (sb_active) begin
+   if ((dut.dph_valid === 1'b1 || time_req === 1'b1) && (hclk_aon_en === 1'b0))
+      sb_aon_gone_lf = sb_aon_gone_lf + 1;
+   else
+      sb_aon_gone_lf = 0;
+   if (sb_aon_gone_lf == 3) begin
+      $display("ERROR: SCOREBOARD SC6 -- hclk_aon_en low for 2 clk_lf periods with a transfer or time request pending (oscillator-enable contract violated) %t ns", $time);
+      error = error + 1;
+   end
+end
+

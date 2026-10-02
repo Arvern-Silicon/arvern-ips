@@ -1,0 +1,15 @@
+{signal: [
+  {name: 'tdi_i (host -> DTM)', wave: 'x222xxxxxxxxxx',
+   data: ['op=read','data (unused)','address']},
+  {name: 'tdo_o (DTM -> host)', wave: 'zzzzzzzzz333zz',
+   data: ['status=ok','read data','0']},
+  {},
+  {name: 'dm_inflight  (internal)', wave: '00001111000000'},
+  {},
+  {name: 'phase', wave: '6...4...3....x',
+   data: ['Shift-DR: request in', 'Update-DR: launch, then RTI', 'Capture-DR, Shift-DR: result out']}
+],
+  head: {text: 'A DMI read over JTAG: scan the request in, Update-DR launches it, a later scan reads the result'},
+  foot: {text: 'Shift is LSB-first: op, then 32-bit data, then address. Launch at Update-DR; the result is captured at the next Capture-DR, after the op completes (dm_inflight low).'},
+  config: {hscale: 2}
+}

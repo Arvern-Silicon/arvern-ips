@@ -1,0 +1,19 @@
+{signal: [
+  {name: 'TCKC',  wave: '0.1........0p.p.p.p.p.p.p.p.p.p.p.p.'},
+  {name: 'TMSC',  wave: 'x.3333333..x4.4.4.4.5.5.5.5.6.6.6.6.',
+   data: ['','','','','','','', 'OAC0','OAC1','OAC2','OAC3','EC0','EC1','EC2','EC3','CP0','CP1','CP2','CP3']},
+  {},
+  {name: 'esc_cnt',   wave: 'x.3333333..x.........................',
+   data: ['1','2','3','4','5','6','7']},
+  {name: 'esc_type_ng', wave: 'x..........4...........x............',
+   data: ['SELECTION (6/7)']},
+  {name: 'act_phase',  wave: 'x..........4.......5.......x........',
+   data: ['P_CODE','P_CP_*']},
+  {name: 'online',     wave: '0..........................1........'}
+],
+  head: {text: 'Selection escape frames the Online Activation sequence (short form)'},
+  foot: {text: ['tspan',
+    'TCKC held HIGH while TMSC toggles = escape; 6/7 changes = SELECTION (Tbl 10-9). The class is captured on the escape TERMINATING FALLING edge,',
+    ['tspan', {x: 740, dy: 14}, 'so the very next rising edge already carries OAC[0] (Rule 11.7.6.2 c). Short form: OAC=0xC, EC=0x8 (SHORT=1), then the Check Packet. LSB-first.']]},
+  config: {hscale: 1}
+}

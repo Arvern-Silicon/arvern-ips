@@ -1,0 +1,30 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Script:    runsim
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : runsim
+# Module Description : Compile and run one arv_primitives test with Icarus Verilog.
+#                      Usage: runsim <test> [NAME[=VALUE] ...]  -- extra defines for this build.
+#                      The test (../src/<test>.v) is a self-checking top module; it prints
+#                      "SIMULATION PASSED" or "SIMULATION FAILED".
+#----------------------------------------------------------------------------
+
+set -e
+test="$1"; shift || true
+[ -n "$test" ] || { echo "Usage: runsim <test> [NAME[=VALUE] ...]"; exit 1; }
+root=../../..
+src=../src/$test.v
+[ -f "$src" ] || { echo "No such test: $src"; exit 1; }
+defs=""
+for d in "$@"; do defs="$defs -D $d"; done
+iverilog -g2005 -Wall -Wno-timescale -o simv -I $root/bench/verilog $defs \
+    $root/rtl/verilog/*.v $root/bench/verilog/osc.v $src
+vvp -n simv

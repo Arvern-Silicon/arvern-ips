@@ -1,0 +1,31 @@
+`verilator_config
+// Internal DUT nets the bench and tests read by hierarchical reference. Verilator may
+// otherwise optimise them and a timed monitor then sees a stale value. Kept narrow on
+// purpose: making everything public (--public-flat-rw) changes the scheduling of the
+// bench's gated clock.
+public_flat_rw -module "ahb_aclint" -var "aph_valid"
+public_flat_rw -module "ahb_aclint" -var "dph_valid"
+public_flat_rw -module "aclint_mtimer" -var "ahb_mtime_lo_read"
+public_flat_rw -module "aclint_mtimer" -var "lf_tick"
+public_flat_rw -module "aclint_mtimer" -var "lf_trust_rstn"
+public_flat_rw -module "aclint_mtimer" -var "load_ack_lf"
+public_flat_rw -module "aclint_mtimer" -var "load_req"
+public_flat_rw -module "aclint_mtimer" -var "mirror_valid"
+public_flat_rw -module "aclint_mtimer" -var "mtime_hi_wr"
+public_flat_rw -module "aclint_mtimer" -var "mtime_lo_wr"
+public_flat_rw -module "aclint_mtimer" -var "mtime_rd_src"
+public_flat_rw -module "aclint_mtimer" -var "mtime_read_stall"
+public_flat_rw -module "aclint_mtimer" -var "mtime_shadow_zicntr"
+public_flat_rw -module "aclint_mtimer" -var "mtimecmp_cmp"
+public_flat_rw -module "aclint_mtimer" -var "mtimecmp_hi_wr"
+public_flat_rw -module "aclint_mtimer" -var "mtimecmp_lo_wr"
+public_flat_rw -module "aclint_mtimer" -var "wake_lf"
+public_flat_rw -module "aclint_mtimer" -var "wr_pending"
+public_flat_rw -module "aclint_mtimer_count_lf" -var "mtime_lf"
+public_flat_rw -module "aclint_mtimer_count_lf" -var "mtime_next"
+public_flat_rw -module "aclint_mtimer_count_lf" -var "load_ack_lf_o"
+public_flat_rw -module "aclint_mtimer_count_lf" -var "mtime_lf_o"
+public_flat_rw -module "aclint_mtimer_count_lf" -var "wake_lf_o"
+// Bench/test variables shared between processes (a monitor's gate flag set by the test
+// sequence): without this Verilator may hand the monitor a stale copy.
+public_flat_rw -module "tb_ahb_aclint" -var "*"

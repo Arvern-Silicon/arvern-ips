@@ -1,0 +1,7 @@
+`verilator_config
+// Bench/test variables shared between processes: without this Verilator may hand a
+// monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_ahb_interconnect" -var "*"
+public_flat_rw -module "tb_ahb_default_subordinate" -var "*"
+public_flat_rw -module "tb_ahb_fused_rom_ctrl" -var "*"
+public_flat_rw -module "tb_ahb_fused_sram_ctrl" -var "*"

@@ -23,7 +23,7 @@ filesets:
     files:
       - rtl/verilog/ahb_periph_example.v
     depend:
-      - arvern:ips:arv_common:1.0
+      - arvern:ips:arv_primitives:1.0
 
 targets:
   default: &default

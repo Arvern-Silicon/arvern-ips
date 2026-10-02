@@ -45,7 +45,12 @@ initial
       @(posedge free_clk);
       @(posedge hresetn);
       @(posedge resetn_lf);
-      repeat(100) @(posedge free_clk);
+      // Scaled with the LF ratio, not a fixed cycle count. MTIME is genuinely
+      // unreadable for the first few LF periods after reset: the read mirror has
+      // never been loaded, and the observer only declares itself trustworthy
+      // once its sampling pipeline is refilled. A raw cycle count is
+      // ample at a fast ratio and far too short at a realistic one.
+      repeat(`LF_CYCLES(5)) @(posedge free_clk);
 
       $display(" ===============================================");
       $display("|        ZICNTR : TIME REQ/GNT HANDSHAKE        |");
@@ -53,8 +58,8 @@ initial
 
       //----------------------------------------------------------------
       // Read #1 on a quiescent bus. With AHB and SSWI idle, the request
-      // alone must wake a gated hclk_i (mtimer_active_o.time_req term),
-      // run the gray-sync roundtrip, and pulse time_gnt_o for one cycle.
+      // alone must wake a gated hclk_i (mtimer_active_o.time_req term)
+      // and pulse time_gnt_o for one cycle.
       //----------------------------------------------------------------
       zicntr_time_read(z0, "read #1");
       z0_shadow = tb_ahb_aclint.dut.u_mtimer.mtime_shadow_zicntr;
@@ -83,8 +88,8 @@ initial
       //     sampled right after the Zicntr read must be >= the Zicntr
       //     snapshot (time only moves forward).
       //----------------------------------------------------------------
-      ahb_read(1, MACHINE, 32'h00404008, 32'h00000000, 2, 0, OK);
-      ahb_read(1, MACHINE, 32'h0040400C, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFF8, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFFC, 32'h00000000, 2, 0, OK);
       m_ahb = tb_ahb_aclint.mtime_shadow_ahb_sim;
       if (m_ahb < z0) begin
          $display("ERROR: Zicntr/AHB disagree -- AHB MTIME 0x%h_%h < earlier Zicntr 0x%h_%h %t ns",
@@ -101,7 +106,7 @@ initial
       // (the "core never re-issues" symptom of the bug shows up here too:
       // with time_gnt_o stranded high, read #2 would observe a stale grant).
       //----------------------------------------------------------------
-      repeat(200) @(posedge free_clk);
+      repeat(`LF_CYCLES(5)) @(posedge free_clk);
 
       zicntr_time_read(z1, "read #2");
       z1_shadow = tb_ahb_aclint.dut.u_mtimer.mtime_shadow_zicntr;

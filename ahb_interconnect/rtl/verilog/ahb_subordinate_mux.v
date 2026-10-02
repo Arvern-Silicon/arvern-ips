@@ -95,7 +95,7 @@ wire      [NR_S-1:0] hsel_latched;
 //=============================================================================
 
 // Detect last cycle of the address phase
-assign addr_phase    = hsel_i & hready_i & (htrans_i != 2'b00);
+assign addr_phase    = hsel_i & hready_i & htrans_i[1];    // NONSEQ/SEQ only; IDLE and BUSY are not transfers
 
 // Latch the HSEL to allow the selection of the proper subordinate signals during the data phase
 arv_ipdff #(.WIDTH(NR_S), .ARST_EN(ARST_EN)) u_hsel_latched (
@@ -110,17 +110,17 @@ assign hresp_o       = |(  hsel_latched  & s_hresp_i    ); // Combine the HRESP 
 assign s_hsel_o      =     s_decoder_i;                    // HSEL output comes from the external address decoder
 
 // Drive AHB outputs to the Subordinate side
-assign s_haddr_o     = {NR_S{ haddr_i      }};
-assign s_hauser_o    = {NR_S{ hauser_i     }};
-assign s_hburst_o    = {NR_S{ hburst_i     }};
-assign s_hmaster_o   = {NR_S{ hmaster_i    }};
-assign s_hmastlock_o = {NR_S{ hmastlock_i  }};
-assign s_hprot_o     = {NR_S{ hprot_i      }};
-assign s_hready_o    = {NR_S{ hready_i     }};
-assign s_hsize_o     = {NR_S{ hsize_i      }};
-assign s_htrans_o    = {NR_S{ htrans_i     }};
-assign s_hwdata_o    = {NR_S{ hwdata_i     }};
-assign s_hwrite_o    = {NR_S{ hwrite_i     }};
+assign s_haddr_o     = {NR_S{ haddr_i                }};
+assign s_hauser_o    = {NR_S{ hauser_i               }};
+assign s_hburst_o    = {NR_S{ hburst_i               }};
+assign s_hmaster_o   = {NR_S{ hmaster_i              }};
+assign s_hmastlock_o = {NR_S{ hmastlock_i            }};
+assign s_hprot_o     = {NR_S{ hprot_i                }};
+assign s_hready_o    = {NR_S{ hready_i               }};
+assign s_hsize_o     = {NR_S{ hsize_i                }};
+assign s_htrans_o    = {NR_S{ htrans_i & {2{hsel_i}} }}; // HTRANS is qualified by hsel_i so a manager parked by an external arbiter cannot present a withdrawn NONSEQ
+assign s_hwdata_o    = {NR_S{ hwdata_i               }};
+assign s_hwrite_o    = {NR_S{ hwrite_i               }};
 
 // Enable clock
 assign hclk_en_o     = addr_phase;

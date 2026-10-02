@@ -61,7 +61,7 @@ wire              addr_in_range  = (src_word_index <= NUM_SOURCES[REG_AW-3:0]) &
                                    (src_word_index != {(REG_AW-2){1'b0}}     ) ;
 
 wire [NUM_SOURCES:0] src_sel;
-assign               src_sel[0] = 1'b0;    // Source 0 never matches a real write
+assign               src_sel[0]  = 1'b0;    // Source 0 never matches a real write
 
 genvar gs;
 generate
@@ -111,14 +111,14 @@ endgenerate
 //=============================================================================
 // Returns {pad, prio_reg[src]} for a selected in-range source, zero otherwise
 // (source 0 and out-of-range RAZ). Upper bits above PRIO_BITS are 0.
+// AND-OR over the one-hot src_sel.
 
 reg  [PRIO_BITS-1:0] rd_prio;
 integer ii;
 always @(*) begin
     rd_prio = {PRIO_BITS{1'b0}};
-    for (ii = 1; ii <= NUM_SOURCES; ii = ii + 1) begin
-        if (src_sel[ii]) rd_prio = prio_reg[ii];
-    end
+    for (ii = 1; ii <= NUM_SOURCES; ii = ii + 1)
+        rd_prio = rd_prio | ({PRIO_BITS{src_sel[ii]}} & prio_reg[ii]);
 end
 
 wire [31:0] rd_mux_w      = {{(32-PRIO_BITS){1'b0}}, rd_prio};
@@ -154,6 +154,8 @@ assign      reg_wr_data_unused  = {reg_wr_data_i[31:PRIO_BITS], {PRIO_BITS{1'b0}
 
 wire  [1:0] reg_addr_lsb_unused;
 assign      reg_addr_lsb_unused = reg_addr_i[1:0];
+
+wire        src_sel0_unused     = src_sel[0];
 
 endmodule // plic_priority
 

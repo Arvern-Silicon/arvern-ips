@@ -48,6 +48,13 @@ create_clock -name     "hclk"                                 \
              -waveform "0 [expr $CLOCK_PERIOD/2]" \
              [get_ports hclk_i]
 
+# sram_clk_o is hclk_i passed through to the SRAM macro: a clock, not a data
+# output, so it is declared as a generated clock of hclk. check_timing still
+# lists the port as an unconstrained endpoint; run_syn's sweep summary expects
+# that for *_clk_o ports and counts any other.
+create_generated_clock -name "sram_clk" -source [get_ports hclk_i] -divide_by 1 \
+             [get_ports sram_clk_o]
+
 
 ##############################################################################
 #                                                                            #

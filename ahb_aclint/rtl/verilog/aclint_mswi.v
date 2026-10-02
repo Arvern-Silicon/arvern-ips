@@ -27,7 +27,7 @@ module  aclint_mswi #(
 
 // CLOCK & RESET (hclk DOMAIN ONLY)
     input  wire                   hclk_i,             // AHB clock
-    input  wire                   hresetn_i,          // Active-low async reset (sync-deassert)
+    input  wire                   hresetn_i,          // Active-low reset (asynchronous when ARST_EN=1, synchronous otherwise)
 
 // GENERIC REGISTER-BANK INTERFACE
     input  wire                   reg_sel_i,          // Access in flight to this sub-component
@@ -52,7 +52,15 @@ localparam [REG_AW-1:0] NUM_HARTS_CAST  = NUM_HARTS_INT[REG_AW-1:0];
 
 wire       [REG_AW-1:0] hart_word_index = (reg_addr_i >> 2);
 wire              [3:0] hart_idx        =  hart_word_index[3:0];
-wire                    addr_in_range   = (hart_word_index < NUM_HARTS_CAST);
+// Word-alignment is part of the decode, deliberately. Without it this is a pure
+// RANGE compare, so reg_addr_i[1:0] is ignored and every sub-word offset ALIASES
+// onto the register below it -- while MTIME, decoded by exact compare, RAZ/WIs
+// the same offsets. Two behaviours in one window, and the aliasing one is the
+// dangerous half: aRVern replicates a store byte across all four lanes
+// (arv_load_store.v), so `sb x0, 1(msip)` would land in bit 0 and clear a
+// pending IPI. Sub-word accesses RAZ/WI everywhere, consistently.
+wire                    addr_in_range   = (hart_word_index < NUM_HARTS_CAST) &
+                                          (reg_addr_i[1:0] == 2'b00);
 
 wire    [NUM_HARTS-1:0] hart_sel;
 genvar gh;

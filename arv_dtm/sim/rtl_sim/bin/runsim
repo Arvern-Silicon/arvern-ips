@@ -1,0 +1,165 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    runsim
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : runsim
+# Module Description : Run a single RTL simulation by test name (with
+#                      optional random seed).
+#----------------------------------------------------------------------------
+
+###############################################################################
+#                            Parse arguments                                  #
+###############################################################################
+testname=""
+seed=""
+dtm=""
+while [[ $# > 0 ]]; do
+    key="$1"
+    shift
+    case $key in
+	-seed)
+	    seed="$1"
+	    shift
+	    ;;
+	-dtm)
+	    dtm="$1"
+	    shift
+	    ;;
+	-sync_rst)
+	    sync_rst=1
+	    ;;
+	*)
+            testname="$key"
+	    ;;
+    esac
+done
+
+###############################################################################
+#                            Parameter Check                                  #
+###############################################################################
+if [ "$testname" == "" ]; then
+  echo "ERROR	 : missing argument"
+  echo "USAGE	 : runsim <test name> [-seed <seed_nr>]"
+  echo "Example	 : runsim simple_rdwr"
+  echo ""
+  echo "In order to switch the verilog simulator, the VERILOG_SIMULATOR environment"
+  echo "variable can be set to the following values:"
+  echo ""
+  echo "		  - iverilog  : Icarus Verilog	(default)"
+  echo "		  - cver      : CVer"
+  echo "		  - verilog   : Verilog-XL"
+  echo "		  - ncverilog : NC-Verilog"
+  echo "		  - vcs	      : VCS"
+  echo "		  - vsim      : Modelsim"
+  echo "		  - isim      : Xilinx simulator"
+  echo ""
+  exit 1
+fi
+
+# Generate random seed if not specified
+if [ "$seed" == "" ]; then
+    seed=`od -A n -t d -N 4 /dev/urandom`
+fi
+
+###############################################################################
+#                     Check if the required files exist                       #
+###############################################################################
+verfile=../src/$testname.v;
+# One unified bench (submit.f) for every transport. The transport is selected by
+# a +define+ that resolves to the bench's DTM_SEL -> arv_dtm's DTM_TYPE. Choose it from the -dtm
+# flag if given, else infer it from the test-name prefix:
+#   uart_*  -> UART DTM
+#   i2c_*   -> I2C  DTM
+#   else    -> JTAG DTM  (idcode/dtmcs/dmi_* are JTAG; dmi_rdwr is generic and
+#                         defaults to JTAG unless -dtm overrides it)
+submitfile=../../../bench/verilog/submit.f
+if [ "$dtm" == "" ]; then
+    case "$testname" in
+        uart_*) dtm="uart" ;;
+        i2c_*)  dtm="i2c"  ;;
+        cjtag_*) dtm="cjtag" ;;
+        *)      dtm="jtag" ;;
+    esac
+fi
+case "$dtm" in
+    uart) DTM_DEFINE="DTM_UART" ;;
+    i2c)  DTM_DEFINE="DTM_I2C"  ;;
+    jtag) DTM_DEFINE="DTM_JTAG" ;;
+    cjtag) DTM_DEFINE="DTM_CJTAG" ;;
+    *)    echo "ERROR: unknown -dtm '$dtm' (expected jtag|cjtag|uart|i2c)"; exit 1 ;;
+esac
+
+# Per-test compile defines (mirrors how SEED is passed): just the transport select.
+# (Auto-baud is the UART DTM's only baud mode -- no per-test define needed.)
+# Tests that must run with TRST unwired (1149.1 makes it optional).
+case "$testname" in
+    *_no_trst) DTM_DEFINE="$DTM_DEFINE NO_TRST" ;;
+    idcode_alt) DTM_DEFINE="$DTM_DEFINE IDCODE_ALT" ;;
+    uart_slow_baud|uart_mid_baud|uart_divisor_walk) DTM_DEFINE="$DTM_DEFINE SLOW_BAUD" ;;
+esac
+
+# -sync_rst: build the SYNCHRONOUS reset variant (ARST_EN=0). Without this the whole
+# sync-reset configuration is unsimulated.
+if [ "$sync_rst" == "1" ]; then
+    DTM_DEFINE="$DTM_DEFINE SYNC_RST"
+fi
+
+# SIM_EXTRA_DEFINES: extra space-separated NAME[=VALUE] defines for this build
+# (e.g. "CJHALF=4" runs the cJTAG bench at the 8x clk_i/TCKC minimum).
+DTM_DEFINE="$DTM_DEFINE ${SIM_EXTRA_DEFINES:-}"
+
+export EXTRA_DEFINES="$DTM_DEFINE"
+if [ "$VERILOG_SIMULATOR" == "isim" ]; then
+    submitfile=../../../bench/verilog/submit.prj;
+fi
+
+if [ ! -e $verfile ]; then
+    echo "Verilog stimulus file $verfile doesn't exist: $verfile"
+    exit 1
+fi
+if [ ! -e $submitfile ]; then
+    echo "Verilog submit file $submitfile doesn't exist: $submitfile"
+    exit 1
+fi
+
+
+###############################################################################
+#                               Cleanup                                       #
+###############################################################################
+echo "Cleanup..."
+rm -rf *.vcd
+rm -rf *.vpd
+rm -rf *.trn
+rm -rf *.dsn
+rm -rf stimulus.v
+
+
+###############################################################################
+#                              Run simulation                                 #
+###############################################################################
+echo " ======================================================="
+echo "| Start simulation:             $testname  (dtm: $dtm)"
+echo " ======================================================="
+echo ""
+echo " Seed: $seed"
+echo ""
+
+# Create links
+if [[ $(uname -s) == CYGWIN* ]];
+then
+    cp $verfile stimulus.v
+else
+    ln -s $verfile stimulus.v
+fi
+
+# Start verilog simulation
+echo "Start Verilog simulation..."
+../bin/rtlsim.sh    stimulus.v $submitfile $seed

@@ -48,8 +48,9 @@ wire           [1:0] data_phase;
 //=============================================================================
 // The default subordinate returns with an error response every time it is accessed
 
-// Detect last cycle of the address phase
-assign addr_phase    = hsel_i & hready_i & (htrans_i != 2'b00);
+// Detect last cycle of the address phase. Only NONSEQ/SEQ (htrans[1]) start
+// a transfer; IDLE and BUSY must get a zero-wait OKAY (IHI0033C Table 3-1).
+assign addr_phase    = hsel_i & hready_i & htrans_i[1];
 
 // Two cycle data phase for the error response
 arv_ipdff #(.WIDTH(2), .ARST_EN(ARST_EN)) u_data_phase (
@@ -64,6 +65,10 @@ assign  hrdata_o     =  32'h00000000;
 
 // Enable clock
 assign  hclk_en_o     = addr_phase | hresp_o;
+
+// htrans[0] (BUSY vs IDLE, SEQ vs NONSEQ) is irrelevant to an error-only subordinate
+wire    htrans0_unused;
+assign  htrans0_unused = htrans_i[0];
 
 
 endmodule // ahb_default_subordinate

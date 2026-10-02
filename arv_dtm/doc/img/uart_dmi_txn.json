@@ -1,0 +1,13 @@
+{signal: [
+  ['host -> DTM',
+    {name: 'uart_rx_i', wave: '2222222x......',
+     data: ['0x55','addr','d[31:24]','d[23:16]','d[15:8]','d[7:0]','op']}],
+  {},
+  ['DTM -> host',
+    {name: 'uart_tx_o', wave: 'x......35555.5',
+     data: ['DMI','status','d[31:24]','d[23:16]','d[15:8]','d[7:0]']}]
+],
+  head: {text: 'One DMI transaction over UART - request 7 bytes, response 5 bytes (each cell = one 8-N-1 byte)'},
+  foot: {text: 'op: 0=poll 1=read 2=write 3=dmihardreset. status: 0=success 2=failed (3=busy is never produced: the response is held until the DMI access completes).'},
+  config: {hscale: 2}
+}

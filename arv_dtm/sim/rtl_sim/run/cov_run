@@ -1,0 +1,33 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# cov_run -- run the coverage sweep.
+#
+#   ./cov_run              sweep every test, coverage into run/cov/
+#   ./cov_run --no-archive discard the existing database instead of keeping it
+#
+# A thin wrapper over `./run_all -cov`, which is what actually drives the sweep
+# (bin/runcov builds each test under Verilator; the normal regression uses
+# Icarus, which has no coverage support). It exists so the three coverage entry
+# points share one prefix and are discoverable together:
+#
+#   ./cov_run     produce the data          (~15 min, one build per test)
+#   ./cov_view    validate + read it        (lints the waivers first)
+#   ../bin/cov_report.py cov/dats --lint    validate on its own
+#
+# Every argument is passed through to run_all, so the usual flags still work:
+#   ./cov_run -n 3                run 3 iterations
+#   COV_ARCHIVE=0 ./cov_run       do not archive the previous database
+#   COV_ARCHIVE_NAME=x ./cov_run  label the archive without being prompted
+#
+# The rules for waiving, and the traps worth knowing, are at the top of
+# run/waivers_cov.md -- where you are already reading when you add one.
+#----------------------------------------------------------------------------
+set -u
+cd "$(dirname "$0")" || exit 1
+
+case "${1:-}" in
+    -h|--help) sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --no-archive) export COV_ARCHIVE=0; shift ;;
+esac
+
+exec ./run_all -cov "$@"

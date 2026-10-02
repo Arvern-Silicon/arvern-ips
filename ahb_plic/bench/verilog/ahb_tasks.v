@@ -30,6 +30,15 @@ localparam MACHINE    = 2'b11;
 localparam OK         = 1'b0;
 localparam ERROR      = 1'b1;
 
+// Drive hprot[1] / hsmode for a privilege mode (as the transfer tasks do).
+task set_mode;
+   input   [1:0] mode;
+   begin
+      hprot  = (mode == USER) ? 4'h0 : 4'h2;
+      hsmode = (mode == SUPERVISOR);
+   end
+endtask
+
 //============================================================================
 // Simple Write access
 //============================================================================

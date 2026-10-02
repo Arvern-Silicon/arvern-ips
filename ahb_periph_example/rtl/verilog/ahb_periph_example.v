@@ -26,7 +26,7 @@ module  ahb_periph_example #(
 
 // AHB CLOCK & RESET
     input  wire             hclk_i,             // module clock (from the AHB clock domain)
-    input  wire             hresetn_i,          // active-low async reset (sync-deassert required at IP boundary)
+    input  wire             hresetn_i,          // active-low reset, style per ASYNC_RST_EN (sync de-assert required at IP boundary)
     output wire             hclk_en_o,          // clock-gate enable; must drive an external ICG cell
 
 // AHB INTERFACE
@@ -67,6 +67,21 @@ module  ahb_periph_example #(
 //=============================================================================
 // 1)  PARAMETER DECLARATION
 //=============================================================================
+
+// MDELEG sits at offset 0x40, so the window needs ADDRW >= 7: a narrower one
+// truncates its offset onto REGOUT_00 and a data write would rewrite the
+// privilege gates.
+// pragma translate_off
+generate
+    if (ADDRW < 7) begin : CHECK_ADDRW
+        initial $fatal(1, "ahb_periph_example: ADDRW (%0d) must be >= 7 (MDELEG is at offset 0x40).", ADDRW);
+    end
+    if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
+        initial $fatal(1, "ahb_periph_example: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
+    end
+endgenerate
+// pragma translate_on
+
 
 // Decoder bit width (defines how many bits are considered for address decoding)
 localparam              DEC_WD             =  ADDRW-2;
@@ -173,10 +188,9 @@ assign   aph_byte_mask = {((hsize_i[1:0]==HSIZE_BYTE) & (haddr_i[1:0]==2'b11)) |
 
 // Data Phase registers
 //
-// The original always block had three branches: load on aph_valid, active
-// CLEAR-to-zero on (else-if) hready_i, and hold otherwise. Faithfully mapped
-// to arv_ipdff: enable when (aph_valid | hready_i), with a per-register d_i
-// hold-mux that selects the captured value when aph_valid and zero otherwise.
+// Load on aph_valid, clear to zero when hready_i is high without a new address
+// phase, hold while hready_i is low: enable (aph_valid | hready_i), with d_i
+// selecting the captured value on aph_valid and zero otherwise.
 wire                    dph_en        =  aph_valid | hready_i;
 
 wire                    dph_valid_nxt     =  aph_valid;
@@ -242,6 +256,12 @@ wire [DEC_SZ-1:0] reg_dec  =  (REGOUT_00_D   &  {DEC_SZ{dph_addr==REGOUT_00}})  
 // Read/Write vectors
 wire [DEC_SZ-1:0] reg_wr   = reg_dec & {DEC_SZ{dph_write}};
 wire [DEC_SZ-1:0] reg_rd   = reg_dec & {DEC_SZ{dph_read}};
+
+// The decoder is sized to the address window, not to the register count, so
+// the slots above MDELEG have no register behind them; and the REGIN bank is
+// read-only, so its write strobes have no consumer. Both are dead by design.
+wire reg_dec_unused = |{reg_wr[DEC_SZ-1:MDELEG+1], reg_rd[DEC_SZ-1:MDELEG+1],
+                        reg_wr[REGIN_15:REGIN_08]};
 
 //=============================================================================
 // 5)  MDELEG REGISTER

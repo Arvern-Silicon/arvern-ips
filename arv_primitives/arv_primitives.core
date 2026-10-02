@@ -1,0 +1,42 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      arv_primitives.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for the arv_primitives library.
+# Other aRVern IPs depend on this via:
+#   depend: [arvern:ips:arv_primitives:1.0]
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:arv_primitives:1.0
+description: Technology-mappable primitives (flops, synchroniser, clock gate, gates) shared across aRVern system IPs.
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/arv_ipdff.v
+      - rtl/verilog/arv_ipdff_sinit.v
+      - rtl/verilog/arv_synchronizer.v
+      - rtl/verilog/arv_cgate.v
+      - rtl/verilog/arv_and.v
+      - rtl/verilog/arv_or.v
+      - rtl/verilog/arv_reset_gen.v
+      - rtl/verilog/arv_osc_ctrl.v
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_synchronizer

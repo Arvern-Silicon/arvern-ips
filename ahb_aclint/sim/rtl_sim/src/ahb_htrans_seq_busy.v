@@ -12,7 +12,7 @@
 // File Name          : ahb_htrans_seq_busy
 // Module Description : Drive the SEQ (2'b11) and BUSY (2'b01) htrans encodings
 //                      the standard BFM never generates. The DUT keys only on
-//                      htrans_i[1] (ahb_aclint.v:91), so:
+//                      htrans_i[1] (ahb_aclint.v, aph_valid), so:
 //                        - SEQ must perform an access (== NONSEQ), and
 //                        - BUSY must NOT start an access (== IDLE).
 //                      Verified through the MSIP[0] side effect.

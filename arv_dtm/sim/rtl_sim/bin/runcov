@@ -1,0 +1,179 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# runcov -- Verilator line/branch/toggle coverage sweep over the arv_dtm suite.
+#
+# Invoked by `run_all -cov`. Builds and runs every test in run_all's list under
+# Verilator (the regression itself uses Icarus, which has no coverage support),
+# merges the per-test databases and reports per-file coverage plus the uncovered
+# line/branch source locations.
+#
+# One build per test: the stimulus file is `include`d into the bench, so each test
+# is a distinct elaboration. Artefacts land in run/cov/ and are not tracked.
+#----------------------------------------------------------------------------
+set -u
+
+RUN_DIR="$(cd "$(dirname "$0")/../run" && pwd)"
+DTM="$(cd "$(dirname "$0")/../../.." && pwd)"          # .../arv_dtm
+IPS="$(cd "$DTM/.." && pwd)"
+BENCH="$DTM/bench/verilog"
+RTL="$DTM/rtl/verilog"
+SRC="$DTM/sim/rtl_sim/src"
+
+# Worker: build and run ONE test in its own directory (the parallel sweep below calls
+# this through xargs). Each test is a distinct elaboration -- the stimulus is `include`d
+# into the bench -- so every worker needs its own stimulus.v and obj directory.
+#   runcov --one <test[:dtm]> <cov_dir>
+if [ "${1:-}" = "--one" ]; then
+    entry="$2"; COV="$3"
+    t="${entry%%:*}"; ov="${entry#*:}"; [ "$ov" = "$t" ] && ov=""
+    case "${ov:-$t}" in
+        uart*)  D=DTM_UART  ;;
+        i2c*)   D=DTM_I2C   ;;
+        cjtag*) D=DTM_CJTAG ;;
+        *)      D=DTM_JTAG  ;;
+    esac
+    XD=""; case "$t" in *_no_trst)  XD="+define+NO_TRST"   ;;
+                       idcode_alt) XD="+define+IDCODE_ALT" ;;
+                       uart_slow_baud|uart_mid_baud|uart_divisor_walk) XD="+define+SLOW_BAUD" ;; esac
+    tag="${t}_$(echo "$D" | tr 'A-Z' 'a-z')"
+    W="$COV/w_$tag"; rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
+    ln -sf "$SRC/$t.v" stimulus.v
+    # Instrument the DUT only (the DTM RTL and the arv_primitives cells it instantiates):
+    # the bench and its transport models are not reported, and instrumenting them
+    # inflates the C++ to compile. COV_SCOPE=all instruments the whole bench.
+    SCOPE=""
+    if [ "${COV_SCOPE:-dut}" = "dut" ]; then
+        { echo "+incdir+$BENCH"; echo "+incdir+$W"; cat "$COV/files.txt"; echo "$BENCH/tb_arv_dtm.v"; } > scope_list.f
+        python3 "$DTM/sim/rtl_sim/bin/cov_scope.py" cov_scope.vlt scope_list.f "$RTL" "$IPS/arv_primitives/rtl/verilog"
+        SCOPE="cov_scope.vlt"
+    fi
+    # --x-initial unique + the +verilator+rand+reset+1 plusarg start every flop at 1, so a
+    # reset net that only ever rises still gives the asynchronous resets a falling edge.
+    # -O0: the instrumented C++ dominates the build and each run simulates for seconds.
+    # Corrected toggle macro for vectors wider than 64 bits (see cov_vlfix.py).
+    python3 "$DTM/sim/rtl_sim/bin/cov_vlfix.py" "obj_$tag"
+    if ! verilator --binary --timing --coverage-line --coverage-toggle --coverage-max-width 65536 --x-initial unique \
+            -Wno-fatal -Wno-TIMESCALEMOD -Wno-LATCH -Wno-WIDTHEXPAND --quiet-exit \
+            -MAKEFLAGS OPT_FAST=-O0 -MAKEFLAGS OPT_SLOW=-O0 -MAKEFLAGS OPT_GLOBAL=-O0 \
+            +define+SEED=1 +define+"$D" +define+NODUMP +define+ARV_COV_RESET_ZERO $XD \
+            +incdir+"$W" +incdir+"$BENCH" +incdir+"$RTL" \
+            $SCOPE -f "$COV/files.txt" "$BENCH/tb_arv_dtm.v" \
+            --top-module tb_arv_dtm --Mdir "obj_$tag" -o "sim_$tag" > build.log 2>&1; then
+        cat build.log >> "$COV/build.log"
+        printf '  %-36s BUILD-FAIL\n' "$tag"; exit 0
+    fi
+    rm -f coverage.dat
+    if timeout 300 "./obj_$tag/sim_$tag" +verilator+rand+reset+${COV_RAND_RESET:-1} 2>&1 | grep -q "SIMULATION PASSED"; then
+        printf '  %-36s PASS\n' "$tag"
+    else
+        printf '  %-36s FAIL/TIMEOUT\n' "$tag"
+    fi
+    [ -f coverage.dat ] && mv coverage.dat "$COV/dats/cov_$tag.dat"
+    cd "$COV" && rm -rf "$W"
+    exit 0
+fi
+
+# With no arguments, sweep the whole list from run_all into run/cov/. With one or more
+# "test" / "test:dtm" arguments, cover just those into run/cov/single/<test>/. The two
+# never overwrite each other, in either direction.
+if [ "$#" -gt 0 ]; then
+    SINGLE=1
+    COV="$RUN_DIR/cov/single/$(printf '%s' "${1%%:*}" | tr -c 'A-Za-z0-9_' '_')"
+else
+    SINGLE=0
+    COV="$RUN_DIR/cov"
+fi
+
+if ! command -v verilator >/dev/null 2>&1; then
+    echo "ERROR: verilator not found -- coverage needs Verilator (>= 5.0, for --binary --timing)."
+    exit 1
+fi
+
+# One sweep at a time: the builds share $COV/stimulus.v, so a second run would both
+# wipe this one's results and swap its stimulus mid-build.
+# NOTE the lock check must stay AHEAD of the archive/wipe below: archiving first
+# would snapshot a database another sweep is still writing.
+if [ -e "$COV/.lock" ] && kill -0 "$(cat "$COV/.lock" 2>/dev/null)" 2>/dev/null; then
+    echo "ERROR: a coverage sweep is already running (pid $(cat "$COV/.lock")); wait or kill it."
+    exit 1
+fi
+# Preserve the previous SWEEP results before they are wiped below. Only the sweep
+# is archived: cov/single/<test>/ is one cheap re-run away, the consolidated
+# database is hours. cp (not mv) so an interrupted archive leaves the originals.
+#   COV_ARCHIVE=0            skip archiving (previous results are simply lost)
+#   COV_ARCHIVE_NAME=<label> name it non-interactively (for run_all / cron)
+# Interactively you are also offered the choice: answer 'none' at the archive
+# prompt to discard instead of keeping.
+ARCHIVED=""
+if [ $SINGLE -eq 0 ] && [ "${COV_ARCHIVE:-1}" != "0" ] && [ -d "$COV/dats" ]; then
+    TS="$(date +%Y%m%d-%H%M%S)"
+    ANAME="${COV_ARCHIVE_NAME:-}"
+    # Prompt ONLY with a human at the terminal -- this is often run detached.
+    # Discarding is offered here too, so COV_ARCHIVE=0 need not be decided upfront.
+    if [ -z "$ANAME" ] && [ -t 0 ]; then
+        SZ="$(du -sh "$COV/dats" 2>/dev/null | cut -f1)"
+        echo "  Existing coverage (${SZ:-size unknown}) will be overwritten by this sweep."
+        printf "  Label to archive it, or 'none' to DISCARD [%s]: " "$TS"
+        read -r ANAME || ANAME=""
+    fi
+    case "$ANAME" in
+        none|None|NONE|discard|DISCARD) ANAME="__discard__" ;;
+    esac
+    if [ "$ANAME" = "__discard__" ]; then
+        echo "  previous coverage NOT archived -- it will be overwritten and lost"
+    else
+        SAFE="$(printf '%s' "$ANAME" | tr -cs 'A-Za-z0-9._-' '_' | sed 's/_*$//')"
+        if [ -n "$SAFE" ]; then ADEST="$RUN_DIR/cov_archive/${TS}_${SAFE}"
+        else                    ADEST="$RUN_DIR/cov_archive/$TS"; fi
+        mkdir -p "$ADEST"
+        cp -R "$COV/dats"          "$ADEST/" 2>/dev/null
+        cp    "$COV/coverage.html" "$ADEST/" 2>/dev/null
+        echo "  previous coverage archived -> ${ADEST#$RUN_DIR/}"
+        ARCHIVED="$ADEST"
+    fi
+fi
+
+if [ $SINGLE -eq 1 ]; then
+    rm -rf "$COV"
+else
+    # Clear the sweep's own artefacts but keep cov/single/ -- per-test results are
+    # independent of the sweep and expensive to reproduce.
+    rm -rf "$COV/dats" "$COV/coverage.html" "$COV/files.txt" "$COV/build.log" "$COV/results.txt" "$COV"/w_* \
+           "$COV/stimulus.v" "$COV/coverage.dat" "$COV"/obj_*
+fi
+mkdir -p "$COV/dats"
+echo $$ > "$COV/.lock"
+trap 'rm -f "$COV/.lock"' EXIT
+cd "$COV" || exit 1
+
+# Full RTL file list, resolved from the two filelists (their paths are relative).
+: > files.txt
+for fl in "$IPS/arv_primitives/rtl/verilog" "$RTL"; do
+    grep -vE '^\s*//|^\s*$|^-f' "$fl/filelist.f" | while read -r f; do echo "$fl/$f"; done >> files.txt
+done
+
+# Test list taken from run_all itself, so the two can never drift apart.
+# Column-aligned there, hence the tolerant whitespace handling.
+if [ "$#" -gt 0 ]; then
+    TESTS="$*"
+else
+    TESTS=$(grep -oE '\$RUNSIM +[a-z0-9_]+( +-dtm +[a-z0-9]+)?' "$RUN_DIR/run_all" \
+            | sed -E 's/\$RUNSIM +//; s/ +-dtm +/:/')
+fi
+
+# Parallel dispatch: COV_JOBS workers (default: all cores).
+JOBS="${COV_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+echo "  $(echo $TESTS | wc -w | tr -d ' ') tests, $JOBS in parallel"
+printf '%s\n' $TESTS | xargs -P "$JOBS" -I{} "$DTM/sim/rtl_sim/bin/runcov" --one {} "$COV" | tee results.txt
+pass=$(grep -c ' PASS$' results.txt); fail=$(grep -c 'FAIL/TIMEOUT$' results.txt); nobuild=$(grep -c 'BUILD-FAIL$' results.txt)
+echo
+echo "  ran: $pass passed, $fail failed, $nobuild build-fail"
+echo
+python3 "$DTM/sim/rtl_sim/bin/cov_report.py" "$COV/dats"
+rc=$?
+echo
+python3 "$DTM/sim/rtl_sim/bin/cov_html.py" "$COV/dats" -o "$COV/coverage.html"
+echo
+echo "  report: $COV/coverage.html"
+[ "$fail" -ne 0 ] || [ "$nobuild" -ne 0 ] && rc=1
+exit $rc

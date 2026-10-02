@@ -180,10 +180,9 @@ arv_ipdff #(.WIDTH(1), .RST_VAL(1'b1), .ARST_EN(ARST_EN)) u_b_hreadyout (
 // 3a) WRITE-ERROR FSM  (Port B — AHB-Lite 2-cycle ERROR response)
 //=============================================================================
 
-assign b_err_st_nxt = (b_err_st == 2'b00) ? (b_aph_write ? 2'b01 : 2'b00) :
-                      (b_err_st == 2'b01) ?                2'b11          :
-                      (b_err_st == 2'b11) ? (b_aph_write ? 2'b01 : 2'b00) :  // back-to-back write
-                                                           2'b00          ;  // default
+// States 00 (idle), 01 (ERR_1), 11 (ERR_2); ERR_2 accepts a back-to-back write.
+assign b_err_st_nxt = (b_err_st == 2'b01) ?                2'b11          :
+                                            (b_aph_write ? 2'b01 : 2'b00) ;
 
 arv_ipdff #(.WIDTH(2), .ARST_EN(ARST_EN)) u_b_err_st (
                  .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),

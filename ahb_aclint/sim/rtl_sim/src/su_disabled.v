@@ -36,6 +36,20 @@ initial
       repeat(2) @(posedge free_clk);
       ahb_read(1, MACHINE, 32'h0040C000, 32'h00000000, 2, 1, OK);
 
+      // ...and it must RAZ/WI for EVERY privilege, not just M. With no SSWI
+      // instantiated, 0xC000 is a reserved window, and reserved windows return
+      // OKAY to anyone -- the adjacent ones (0xD000+) always did. Erroring only
+      // for S/U advertises a supervisor device that is not there, and leaks the
+      // build configuration to unprivileged software. Only meaningful when the
+      // privilege filter is actually enabled.
+      if (PRIV_CHECK_EN != 0) begin
+         ahb_read (1, SUPERVISOR, 32'h0040C000, 32'h00000000, 2, 1, OK);
+         ahb_write(1, SUPERVISOR, 32'h0040C000, 32'hFFFFFFFF, 2, OK);
+         ahb_read (1, USER,       32'h0040C000, 32'h00000000, 2, 1, OK);
+         ahb_write(1, USER,       32'h0040C000, 32'hFFFFFFFF, 2, OK);
+         $display("PASS:  elided SSWI window RAZ/WIs for S and U, like any reserved window %t ns", $time);
+      end
+
       // Off-base offset inside the SSWI window also RAZ/WI.
       ahb_read(1, MACHINE, 32'h0040C004, 32'h00000000, 2, 1, OK);
 

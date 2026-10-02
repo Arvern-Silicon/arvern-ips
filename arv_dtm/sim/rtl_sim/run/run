@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Enable/Disable waveform dumping
+SIMULATION_NODUMP=0
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+# Default test name (generic DMI r/w; add "-dtm uart|i2c" to pick a transport)
+if [ "$#" -eq 0 ]; then
+    set -- dmi_rdwr
+fi
+
+# -cov: cover THIS test under Verilator instead of simulating it with Icarus, and
+# report what it alone reaches. Results land in run/cov-<test>/ so they never collide
+# with the full-suite sweep in run/cov/ (see run_all -cov).
+COV_MODE=0
+ARGS=()
+for a in "$@"; do
+    if [ "$a" = "-cov" ]; then COV_MODE=1; else ARGS+=("$a"); fi
+done
+set -- "${ARGS[@]}"
+if [ "$#" -eq 0 ]; then
+    set -- dmi_rdwr
+fi
+
+# First argument is the test name; any remaining args (e.g. -dtm uart, -seed N)
+# pass straight through to runsim.
+testname=$1
+if [ ! -e "../src/$testname.v" ]; then
+   echo "[ERROR] File does not exist: ../src/$testname.v"
+   echo ""
+   echo "The following tests have been detected:"
+   for file in ../src/*.v; do
+      echo "                                          + $(basename "$file" .v)"
+   done
+   exit 1
+fi
+
+# Run simulation
+if [ $COV_MODE -eq 1 ]; then
+    # runcov wants "test" or "test:dtm"; pull -dtm out of the passthrough args.
+    dtm=""
+    prev=""
+    for a in "$@"; do
+        [ "$prev" = "-dtm" ] && dtm="$a"
+        prev="$a"
+    done
+    if [ -n "$dtm" ]; then
+        exec ../bin/runcov "$testname:$dtm"
+    else
+        exec ../bin/runcov "$testname"
+    fi
+fi
+../bin/runsim "$@"

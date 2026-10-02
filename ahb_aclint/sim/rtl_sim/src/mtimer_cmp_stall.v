@@ -10,65 +10,95 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : mtimer_cmp_stall.v
-// Module Description : Exercise the MTIMECMP write-busy AHB back-pressure path.
-//                      A second write to the SAME MTIMECMP half while the
-//                      first write's CDC handshake is still in flight must
-//                      STALL the AHB bus (reg_ready_o -> hreadyout_o low,
-//                      mtimecmp_write_stall asserted) until the first commits,
-//                      then complete -- with the final value being the second
-//                      write. Previously no test issued a second same-half
-//                      write before the CDC settled, so this wait-state path
-//                      and the busy-gated write_pulse were never stimulated.
+// Module Description : MTIMECMP WRITES MUST NEVER BACK-PRESSURE THE BUS.
+//
+//                      Stage 1 of the MTIMECMP write shadow accepts a write on
+//                      any cycle and stage 2 hands it to the LF domain on the
+//                      next tick, so there is nothing for a write to wait on.
+//                      Hammer the same half far faster than the LF domain can
+//                      consume it and assert that hreadyout_o never once drops,
+//                      and that the value that survives is the LAST one
+//                      written. Repeated writes to one half while the previous
+//                      value is still crossing are the pattern a handshaked
+//                      crossing would have to stall, so it is the one guarded.
 //----------------------------------------------------------------------------
 
-reg stall_observed;
+integer    ii;
+integer    stall_cycles;
+reg        measure;
+reg [31:0] rb;
 
-// Latch any cycle in which the MTIMECMP write stall fires (drives hreadyout
-// low). Sampled on free_clk because hclk_i may be gated between phases.
-initial stall_observed = 1'b0;
-always @(posedge free_clk)
-   if (tb_ahb_aclint.dut.u_mtimer.mtimecmp_write_stall === 1'b1)
-      stall_observed = 1'b1;
+`define MTIMECMP_LO_ADDR 32'h00404000
+`define MTIMECMP_HI_ADDR 32'h00404004
+
+// Count every cycle hreadyout_o is low while the burst is in flight. Sampled on
+// free_clk because hclk_i may be gated between phases.
+initial
+   begin
+      stall_cycles = 0;
+      measure      = 1'b0;
+      forever begin
+         @(posedge free_clk);
+         if (measure && (tb_ahb_aclint.dut.hreadyout_o === 1'b0))
+            stall_cycles = stall_cycles + 1;
+      end
+   end
 
 initial
    begin
       @(posedge free_clk);
       @(posedge hresetn);
       @(posedge resetn_lf);
-      repeat(20) @(posedge free_clk);
+      // Scaled with the LF ratio, not a fixed cycle count. MTIME is genuinely
+      // unreadable for the first few LF periods after reset: the read mirror has
+      // never been loaded, and the observer only declares itself trustworthy
+      // once its sampling pipeline is refilled. A raw cycle count is
+      // ample at a fast ratio and far too short at a realistic one.
+      repeat(`LF_CYCLES(5)) @(posedge free_clk);
 
       $display(" ===============================================");
-      $display("|     MTIMER : MTIMECMP WRITE-BUSY STALL        |");
+      $display("|   MTIMECMP : WRITES NEVER STALL THE BUS       |");
       $display(" ===============================================");
 
-      // First write to MTIMECMP_LO[0]. This fires write_lo_pulse and raises
-      // write_lo_busy on the next edge; the CDC handshake then runs for many
-      // cycles on the LF side.
-      ahb_write(1, MACHINE, 32'h00404000, 32'h11111111, 2, OK);
-
-      // Confirm the busy flag actually came up (otherwise the stall test below
-      // would be vacuous).
-      if (tb_ahb_aclint.dut.u_mtimer.write_lo_busy[0] !== 1'b1) begin
-         $display("WARNING: write_lo_busy[0] not high right after first write -- CDC faster than expected %t ns", $time);
+      // Sixteen back-to-back writes to the SAME half, with no gap. At R = 10
+      // that is well over an LF period of traffic, so under the old design the
+      // second write alone would have blocked for thousands of cycles.
+      measure = 1'b1;
+      for (ii = 0; ii < 16; ii = ii + 1) begin
+         ahb_write(1, MACHINE, `MTIMECMP_LO_ADDR, 32'h10000000 + ii, 2, OK);
       end
+      ahb_write(1, MACHINE, `MTIMECMP_HI_ADDR, 32'h00000042, 2, OK);
+      measure = 1'b0;
 
-      // Second write to the SAME half with NO settle gap. reg_ready_o must go
-      // low (bus stalls) until the first handshake completes, then this value
-      // commits. The blocking ahb_write naturally rides the wait states.
-      ahb_write(1, MACHINE, 32'h00404000, 32'h22222222, 2, OK);
-
-      if (stall_observed) begin
-         $display("PASS:  MTIMECMP second same-half write stalled the bus (mtimecmp_write_stall seen) %t ns", $time);
-      end else begin
-         $display("ERROR: MTIMECMP second same-half write did NOT stall -- write-busy back-pressure missing %t ns", $time);
+      if (stall_cycles != 0) begin
+         $display("ERROR: MTIMECMP write burst stalled the bus for %0d cycles -- writes must be zero-wait-state %t ns",
+                  stall_cycles, $time);
          error = error + 1;
+      end else begin
+         $display("PASS:  17 back-to-back MTIMECMP writes, zero wait states %t ns", $time);
       end
 
-      // Let both CDC handshakes drain, then read back: the surviving value
-      // must be the SECOND write (0x22222222), proving the stalled write
-      // committed and was not dropped.
-      repeat(80) @(posedge free_clk);
-      ahb_read(1, MACHINE, 32'h00404000, 32'h22222222, 2, 1, OK);
+      // Read-back is from stage 1, so the last value written is visible
+      // immediately -- no waiting for the LF domain.
+      ahb_read(1, MACHINE, `MTIMECMP_LO_ADDR, 32'h1000000F, 2, 0, OK);
+      ahb_read(1, MACHINE, `MTIMECMP_HI_ADDR, 32'h00000042, 2, 0, OK);
+      $display("PASS:  MTIMECMP read-back returns the last value written %t ns", $time);
+
+      // And the LF-resident copy must converge on that same last value once a
+      // tick has carried it across. This is the half that actually feeds the
+      // comparator, so a stage-1-only update would be a silent trap.
+      repeat(`LF_CYCLES(4)) @(posedge free_clk);
+      if (tb_ahb_aclint.dut.u_mtimer.mtimecmp_cmp[31:0] !== 32'h1000000F) begin
+         $display("ERROR: LF-resident MTIMECMP_LO did not take the last written value -- got 0x%h expected 0x1000000F %t ns",
+                  tb_ahb_aclint.dut.u_mtimer.mtimecmp_cmp[31:0], $time);
+         error = error + 1;
+      end else if (tb_ahb_aclint.dut.u_mtimer.mtimecmp_cmp[63:32] !== 32'h00000042) begin
+         $display("ERROR: LF-resident MTIMECMP_HI did not take the last written value -- got 0x%h expected 0x00000042 %t ns",
+                  tb_ahb_aclint.dut.u_mtimer.mtimecmp_cmp[63:32], $time);
+         error = error + 1;
+      end else begin
+         $display("PASS:  LF-resident MTIMECMP converged on the last written value %t ns", $time);
+      end
 
       repeat(21) @(posedge free_clk);
       $display("");

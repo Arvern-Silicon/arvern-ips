@@ -154,16 +154,22 @@ localparam        [10:0] NUM_SOURCES_S11 = NUM_SOURCES_INT[10:0];
 localparam               SRC_IDX_W       = $clog2(NUM_SOURCES + 1);
 
 reg  [31:0] rd_word;
+reg   [5:0] ww;     // 0..32
 reg   [5:0] bb;     // 0..32
 reg  [10:0] src;    // 0..NUM_SOURCES (max 1023)
+// AND-OR over the word decode (word_idx is the low 5 bits of the full index,
+// so word_in_range stays in every term); the source-range test is on loop
+// constants.
 always @(*) begin
     rd_word = 32'h0;
     src     = 11'h0;
-    if (word_in_range) begin
+    for (ww = 6'h0; ww < 6'd32; ww = ww + 6'h1) begin
         for (bb = 6'h0; bb < 6'd32; bb = bb + 6'h1) begin
-            src = {6'h0, word_idx} * 11'd32 + {5'h0, bb};
+            src = {5'h0, ww} * 11'd32 + {5'h0, bb};
             if ((src >= 11'h1) && (src <= NUM_SOURCES_S11))
-                rd_word[bb[4:0]] = pending[src[SRC_IDX_W-1:0]];
+                rd_word[bb[4:0]] = rd_word[bb[4:0]] |
+                                   (word_in_range & (word_idx == ww[4:0]) &
+                                    pending[src[SRC_IDX_W-1:0]]);
         end
     end
 end
@@ -199,6 +205,8 @@ assign      irq_src0_unused     = irq_src_i[0];
 
 wire  [1:0] reg_addr_lsb_unused;
 assign      reg_addr_lsb_unused = reg_addr_i[1:0];
+
+wire        src_unused          = |src;
 
 endmodule // plic_pending
 

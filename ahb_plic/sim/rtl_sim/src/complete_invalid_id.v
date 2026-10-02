@@ -30,7 +30,8 @@
 //     C. write COMPLETE @ ctx0 with id=0 (reserved)         -> silently ignored
 //
 //     D. write COMPLETE @ ctx0 with id=NUM_SOURCES+1 (out of range)
-//        => silently ignored.
+//        => silently ignored. The ID is the whole data word: 0x805 and
+//        0x8000_0005 carry 5 in their low bits and are out of range too.
 //
 //     E. write COMPLETE @ ctx0 with id=5 (the real one)
 //        => completes; in_service[5] returns to 0.
@@ -141,6 +142,18 @@ initial
          error = error + 1;
       end else
          $display("PASS:  in_service[5] still 1 after OOR complete silently ignored %t ns", $time);
+
+      // Out-of-range IDs whose low 11 bits name the in-service source 5.
+      ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'h0000_0805, 2, OK);
+      repeat(2) @(posedge free_clk);
+      ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'h8000_0005, 2, OK);
+      repeat(2) @(posedge free_clk);
+
+      if (tb_ahb_plic.dut.u_pending.in_service[5] !== 1'b1) begin
+         $display("ERROR: in_service[5] cleared by a complete of 0x805 / 0x8000_0005 (upper ID bits ignored) %t ns", $time);
+         error = error + 1;
+      end else
+         $display("PASS:  complete IDs 0x805 / 0x8000_0005 ignored as out of range %t ns", $time);
 
       $display(" ===============================================");
       $display("|    E. COMPLETE id=5 (genuine) -- accepted     |");

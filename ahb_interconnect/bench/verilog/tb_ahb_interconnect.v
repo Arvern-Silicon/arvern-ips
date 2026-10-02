@@ -28,6 +28,32 @@ parameter            NR_M       = 3;                     // Number of AHB Manage
 parameter            NR_S       = 4;                     // Number of AHB Subordinates
 parameter            HAUSER_W   = 1;                     // Width of the HAUSER bus (min value is 1)
 
+// Per-manager privilege sideband. These MUST differ between managers: the
+// fabric only fans hauser/hprot out from the granted manager, so identical
+// values make a mis-mux invisible -- which is what the whole suite used to do
+// (every manager drove hauser=0 and hprot=4'h2).
+//
+// They differ ONLY in bits that do not change the access mode. hprot[1] stays
+// 1 (privileged) and hauser[0] -- the aRVern hsmode bit -- stays 0 (M-mode) on
+// every manager, because ahb_periph_example is a real privilege-filtering
+// subordinate on s2/s3 (.hsmode_i(ws_s2_hauser[0])) and denies S- or U-mode
+// under its M-only MDELEG default. Varying the MODE belongs in a dedicated
+// test that opens MDELEG first; varying the ROUTING is what these do.
+//   bit[0] opcode/data, bit[1] privileged, bit[2] bufferable, bit[3] cacheable
+localparam     [3:0] MGR0_HPROT = 4'h2;   // 0010  privileged, data
+localparam     [3:0] MGR1_HPROT = 4'h3;   // 0011  privileged, opcode
+localparam     [3:0] MGR2_HPROT = 4'hA;   // 1010  privileged, data, cacheable
+
+// Manager-supplied HMASTER bits. M1 is the tagged manager: bit 3 of its HMASTER
+// follows haddr[2], so the tag toggles between consecutive word transfers and a
+// fabric presenting a live tag instead of the cached one is caught. The other
+// managers and M1's untagged bits drive ones, which the TAG mask must block.
+// IDs stay at their defaults, so M1 presents 4'h1 or 4'h9.
+localparam     [3:0] MGR1_HMASTER_TAG = 4'h8;
+wire           [3:0] m0_hmaster_tag   = 4'hF;
+wire           [3:0] m1_hmaster_tag;
+wire           [3:0] m2_hmaster_tag   = 4'hF;
+
 // Reset architecture (1=async active-low [default], 0=synchronous).  Build-time
 // overridable via `-D ASYNC_RST_EN=0` so the block-level sim can exercise the
 // interconnect variants' synchronous-reset configuration.
@@ -91,6 +117,90 @@ reg                  m2_hwrite;
 wire          [31:0] m2_hrdata;
 wire                 m2_hready;
 wire                 m2_hresp;
+
+// Managers reach the DUT through 1 ns delays in both directions. The tasks change
+// inputs right after `@(posedge free_clk)` and sample hready on that same edge; with
+// the delays the DUT always samples the old inputs and the tasks always see the old
+// outputs at an edge, whatever the simulator's process order (Icarus and Verilator
+// differ). The bench keeps using the undelayed names.
+wire [31:0]          m0_haddr_d;
+assign #1 m0_haddr_d = m0_haddr;
+wire [HAUSER_W-1:0]  m0_hauser_d;
+assign #1 m0_hauser_d = m0_hauser;
+wire [2:0]           m0_hburst_d;
+assign #1 m0_hburst_d = m0_hburst;
+wire                 m0_hmastlock_d;
+assign #1 m0_hmastlock_d = m0_hmastlock;
+wire [3:0]           m0_hprot_d;
+assign #1 m0_hprot_d = m0_hprot;
+wire [2:0]           m0_hsize_d;
+assign #1 m0_hsize_d = m0_hsize;
+wire [1:0]           m0_htrans_d;
+assign #1 m0_htrans_d = m0_htrans;
+wire [31:0]          m0_hwdata_d;
+assign #1 m0_hwdata_d = m0_hwdata;
+wire                 m0_hwrite_d;
+assign #1 m0_hwrite_d = m0_hwrite;
+wire [3:0]           m0_hmaster_tag_d;
+assign #1 m0_hmaster_tag_d = m0_hmaster_tag;
+wire [31:0]          m0_hrdata_dut;
+assign #1 m0_hrdata = m0_hrdata_dut;
+wire                 m0_hready_dut;
+assign #1 m0_hready = m0_hready_dut;
+wire                 m0_hresp_dut;
+assign #1 m0_hresp = m0_hresp_dut;
+wire [31:0]          m1_haddr_d;
+assign #1 m1_haddr_d = m1_haddr;
+wire [HAUSER_W-1:0]  m1_hauser_d;
+assign #1 m1_hauser_d = m1_hauser;
+wire [2:0]           m1_hburst_d;
+assign #1 m1_hburst_d = m1_hburst;
+wire                 m1_hmastlock_d;
+assign #1 m1_hmastlock_d = m1_hmastlock;
+wire [3:0]           m1_hprot_d;
+assign #1 m1_hprot_d = m1_hprot;
+wire [2:0]           m1_hsize_d;
+assign #1 m1_hsize_d = m1_hsize;
+wire [1:0]           m1_htrans_d;
+assign #1 m1_htrans_d = m1_htrans;
+wire [31:0]          m1_hwdata_d;
+assign #1 m1_hwdata_d = m1_hwdata;
+wire                 m1_hwrite_d;
+assign #1 m1_hwrite_d = m1_hwrite;
+wire [3:0]           m1_hmaster_tag_d;
+assign #1 m1_hmaster_tag_d = m1_hmaster_tag;
+wire [31:0]          m1_hrdata_dut;
+assign #1 m1_hrdata = m1_hrdata_dut;
+wire                 m1_hready_dut;
+assign #1 m1_hready = m1_hready_dut;
+wire                 m1_hresp_dut;
+assign #1 m1_hresp = m1_hresp_dut;
+wire [31:0]          m2_haddr_d;
+assign #1 m2_haddr_d = m2_haddr;
+wire [HAUSER_W-1:0]  m2_hauser_d;
+assign #1 m2_hauser_d = m2_hauser;
+wire [2:0]           m2_hburst_d;
+assign #1 m2_hburst_d = m2_hburst;
+wire                 m2_hmastlock_d;
+assign #1 m2_hmastlock_d = m2_hmastlock;
+wire [3:0]           m2_hprot_d;
+assign #1 m2_hprot_d = m2_hprot;
+wire [2:0]           m2_hsize_d;
+assign #1 m2_hsize_d = m2_hsize;
+wire [1:0]           m2_htrans_d;
+assign #1 m2_htrans_d = m2_htrans;
+wire [31:0]          m2_hwdata_d;
+assign #1 m2_hwdata_d = m2_hwdata;
+wire                 m2_hwrite_d;
+assign #1 m2_hwrite_d = m2_hwrite;
+wire [3:0]           m2_hmaster_tag_d;
+assign #1 m2_hmaster_tag_d = m2_hmaster_tag;
+wire [31:0]          m2_hrdata_dut;
+assign #1 m2_hrdata = m2_hrdata_dut;
+wire                 m2_hready_dut;
+assign #1 m2_hready = m2_hready_dut;
+wire                 m2_hresp_dut;
+assign #1 m2_hresp = m2_hresp_dut;
 
 // AHB Subordinate Interfaces
 wire          [31:0] s0_hrdata;
@@ -381,6 +491,16 @@ always @(free_clk or s3_hclk_en)
     s3_hclk_en_latch <= s3_hclk_en;
 assign  s3_hclk  =  (free_clk & s3_hclk_en_latch);
 
+// Checkers run once reset has been applied and released: before that the flops hold
+// their power-on values (X in Icarus, arbitrary in Verilator) and mean nothing.
+reg tb_rst_done;
+initial begin
+   tb_rst_done = 1'b0;
+   wait (hresetn === 1'b0);
+   @(posedge hresetn);
+   tb_rst_done = 1'b1;
+end
+
 // Reset generation
 initial
   begin
@@ -425,7 +545,7 @@ initial
      m0_hauser                = {HAUSER_W{1'h0}};
      m0_hburst                =  3'h0;
      m0_hmastlock             =  1'h0;
-     m0_hprot                 =  4'h2;
+     m0_hprot                 =  MGR0_HPROT;
      m0_hsize                 =  3'h0;
      m0_htrans                =  2'h0;
      m0_hwdata                = 32'h00000000;
@@ -435,7 +555,7 @@ initial
      m1_hauser                = {HAUSER_W{1'h0}};
      m1_hburst                =  3'h0;
      m1_hmastlock             =  1'h0;
-     m1_hprot                 =  4'h2;
+     m1_hprot                 =  MGR1_HPROT;
      m1_hsize                 =  3'h0;
      m1_htrans                =  2'h0;
      m1_hwdata                = 32'h00000000;
@@ -445,13 +565,15 @@ initial
      m2_hauser                = {HAUSER_W{1'h0}};
      m2_hburst                =  3'h0;
      m2_hmastlock             =  1'h0;
-     m2_hprot                 =  4'h2;
+     m2_hprot                 =  MGR2_HPROT;
      m2_hsize                 =  3'h0;
      m2_htrans                =  2'h0;
      m2_hwdata                = 32'h00000000;
      m2_hwrite                =  1'h0;
   end
 
+
+assign m1_hmaster_tag = {m1_haddr_d[2] & m1_hready, 3'b111};
 
 //--------------------------------------------------------------------
 // DUT: AHB FABRIC
@@ -474,16 +596,17 @@ initial
         wire  [4*NR_S_X_SRAM-1:0] dut_sram_wen;
 
         ahb_interconnect_fused #(
-            .NR_M         ( NR_M-1                  ),
-            .NR_S_X_ROM   ( NR_S_X_ROM              ),
-            .NR_S_X_SRAM  ( NR_S_X_SRAM             ),
-            .NR_S_NX      ( NR_S-NR_S_X             ),
-            .HAUSER_W     ( HAUSER_W                ),
-            .ASYNC_RST_EN ( ASYNC_RST_EN            ),
+            .NR_M             ( NR_M-1                   ),
+            .NR_S_X_ROM       ( NR_S_X_ROM               ),
+            .NR_S_X_SRAM      ( NR_S_X_SRAM              ),
+            .NR_S_NX          ( NR_S-NR_S_X              ),
+            .HAUSER_W         ( HAUSER_W                 ),
+            .M_NX_HMASTER_TAG ( {4'h0, MGR1_HMASTER_TAG} ),
+            .ASYNC_RST_EN     ( ASYNC_RST_EN             ),
 `ifdef FUSED_FIXED_B_PRIO
-            .FIXED_B_PRIO ( 1'b1                    )
+            .FIXED_B_PRIO     ( 1'b1                     )
 `else
-            .FIXED_B_PRIO ( 1'b0                    )
+            .FIXED_B_PRIO     ( 1'b0                     )
 `endif
         ) dut (
 
@@ -494,34 +617,35 @@ initial
             .hclk_en_o             ( dut_hclk_en                                             ),
 
         // EXECUTABLE AHB BUS MANAGER INTERFACE
-            .m_x_haddr_i           ( m0_haddr & {32{m0_hready}}                              ),
-            .m_x_hauser_i          ( m0_hauser                                               ),
-            .m_x_hburst_i          ( m0_hburst                                               ),
-            .m_x_hmastlock_i       ( m0_hmastlock                                            ),
-            .m_x_hprot_i           ( m0_hprot                                                ),
-            .m_x_hsize_i           ( m0_hsize                                                ),
-            .m_x_htrans_i          ( m0_htrans                                               ),
-            .m_x_hwdata_i          ( m0_hwdata                                               ),
-            .m_x_hwrite_i          ( m0_hwrite                                               ),
+            .m_x_haddr_i           ( m0_haddr_d & {32{m0_hready}}                              ),
+            .m_x_hauser_i          ( m0_hauser_d                                               ),
+            .m_x_hburst_i          ( m0_hburst_d                                               ),
+            .m_x_hmastlock_i       ( m0_hmastlock_d                                            ),
+            .m_x_hprot_i           ( m0_hprot_d                                                ),
+            .m_x_hsize_i           ( m0_hsize_d                                                ),
+            .m_x_htrans_i          ( m0_htrans_d                                               ),
+            .m_x_hwdata_i          ( m0_hwdata_d                                               ),
+            .m_x_hwrite_i          ( m0_hwrite_d                                               ),
 
-            .m_x_hrdata_o          ( m0_hrdata                                               ),
-            .m_x_hready_o          ( m0_hready                                               ),
-            .m_x_hresp_o           ( m0_hresp                                                ),
+            .m_x_hrdata_o          ( m0_hrdata_dut                                               ),
+            .m_x_hready_o          ( m0_hready_dut                                               ),
+            .m_x_hresp_o           ( m0_hresp_dut                                                ),
 
         // NON-EXECUTABLE AHB MANAGER INTERFACES
-            .m_nx_haddr_i          ({m2_haddr & {32{m2_hready}}, m1_haddr & {32{m1_hready}} }),
-            .m_nx_hauser_i         ({m2_hauser,                  m1_hauser                  }),
-            .m_nx_hburst_i         ({m2_hburst,                  m1_hburst                  }),
-            .m_nx_hmastlock_i      ({m2_hmastlock,               m1_hmastlock               }),
-            .m_nx_hprot_i          ({m2_hprot,                   m1_hprot                   }),
-            .m_nx_hsize_i          ({m2_hsize,                   m1_hsize                   }),
-            .m_nx_htrans_i         ({m2_htrans,                  m1_htrans                  }),
-            .m_nx_hwdata_i         ({m2_hwdata,                  m1_hwdata                  }),
-            .m_nx_hwrite_i         ({m2_hwrite,                  m1_hwrite                  }),
+            .m_nx_haddr_i          ({m2_haddr_d & {32{m2_hready}}, m1_haddr_d & {32{m1_hready}} }),
+            .m_nx_hauser_i         ({m2_hauser_d,                  m1_hauser_d                  }),
+            .m_nx_hburst_i         ({m2_hburst_d,                  m1_hburst_d                  }),
+            .m_nx_hmaster_i        ({m2_hmaster_tag_d,             m1_hmaster_tag_d             }),
+            .m_nx_hmastlock_i      ({m2_hmastlock_d,               m1_hmastlock_d               }),
+            .m_nx_hprot_i          ({m2_hprot_d,                   m1_hprot_d                   }),
+            .m_nx_hsize_i          ({m2_hsize_d,                   m1_hsize_d                   }),
+            .m_nx_htrans_i         ({m2_htrans_d,                  m1_htrans_d                  }),
+            .m_nx_hwdata_i         ({m2_hwdata_d,                  m1_hwdata_d                  }),
+            .m_nx_hwrite_i         ({m2_hwrite_d,                  m1_hwrite_d                  }),
 
-            .m_nx_hrdata_o         ({m2_hrdata,                  m1_hrdata                  }),
-            .m_nx_hready_o         ({m2_hready,                  m1_hready                  }),
-            .m_nx_hresp_o          ({m2_hresp,                   m1_hresp                   }),
+            .m_nx_hrdata_o         ({m2_hrdata_dut,                  m1_hrdata_dut                  }),
+            .m_nx_hready_o         ({m2_hready_dut,                  m1_hready_dut                  }),
+            .m_nx_hresp_o          ({m2_hresp_dut,                   m1_hresp_dut                   }),
 
         // ARBITER INTERFACE for NON-EXECUTABLE MANAGERS
             .m_nx_grant_i          ( m_grant[NR_M-2:0]                                       ),
@@ -586,49 +710,51 @@ initial
         parameter  NR_S_X  = 2;  // Number of Executable AHB Subordinates
 
         ahb_interconnect_hiperf #(
-            .NR_M         ( NR_M-1                  ),
-            .NR_S_X       ( NR_S_X                  ),
-            .NR_S_NX      ( NR_S-NR_S_X             ),
-            .HAUSER_W     ( HAUSER_W                ),
-            .ASYNC_RST_EN ( ASYNC_RST_EN            )
+            .NR_M             ( NR_M-1                   ),
+            .NR_S_X           ( NR_S_X                   ),
+            .NR_S_NX          ( NR_S-NR_S_X              ),
+            .HAUSER_W         ( HAUSER_W                 ),
+            .M_NX_HMASTER_TAG ( {4'h0, MGR1_HMASTER_TAG} ),
+            .ASYNC_RST_EN     ( ASYNC_RST_EN             )
         ) dut (
-        
+
         // AHB CLOCK & RESET
             .hclk_i                ( dut_hclk                                                ),
             .hresetn_i             ( hresetn                                                 ),
-        
+
             .hclk_en_o             ( dut_hclk_en                                             ),
 
         // EXECUTABLE AHB BUS MANAGER INTERFACE
-            .m_x_haddr_i           ( m0_haddr & {32{m0_hready}}                              ),
-            .m_x_hauser_i          ( m0_hauser                                               ),
-            .m_x_hburst_i          ( m0_hburst                                               ),
-            .m_x_hmastlock_i       ( m0_hmastlock                                            ),
-            .m_x_hprot_i           ( m0_hprot                                                ),
-            .m_x_hsize_i           ( m0_hsize                                                ),
-            .m_x_htrans_i          ( m0_htrans                                               ),
-            .m_x_hwdata_i          ( m0_hwdata                                               ),
-            .m_x_hwrite_i          ( m0_hwrite                                               ),
+            .m_x_haddr_i           ( m0_haddr_d & {32{m0_hready}}                              ),
+            .m_x_hauser_i          ( m0_hauser_d                                               ),
+            .m_x_hburst_i          ( m0_hburst_d                                               ),
+            .m_x_hmastlock_i       ( m0_hmastlock_d                                            ),
+            .m_x_hprot_i           ( m0_hprot_d                                                ),
+            .m_x_hsize_i           ( m0_hsize_d                                                ),
+            .m_x_htrans_i          ( m0_htrans_d                                               ),
+            .m_x_hwdata_i          ( m0_hwdata_d                                               ),
+            .m_x_hwrite_i          ( m0_hwrite_d                                               ),
 
-            .m_x_hrdata_o          ( m0_hrdata                                               ),
-            .m_x_hready_o          ( m0_hready                                               ),
-            .m_x_hresp_o           ( m0_hresp                                                ),
-        
+            .m_x_hrdata_o          ( m0_hrdata_dut                                               ),
+            .m_x_hready_o          ( m0_hready_dut                                               ),
+            .m_x_hresp_o           ( m0_hresp_dut                                                ),
+
         // NON-EXECUTABLE AHB MANAGER INTERFACES
-            .m_nx_haddr_i          ({m2_haddr & {32{m2_hready}}, m1_haddr & {32{m1_hready}} }), // Mask the address with Hready to constrain a bit more the simulation (i.e. haddr only needs to be valid during the last cycle of the address phase)
-            .m_nx_hauser_i         ({m2_hauser,                  m1_hauser                  }),
-            .m_nx_hburst_i         ({m2_hburst,                  m1_hburst                  }),
-            .m_nx_hmastlock_i      ({m2_hmastlock,               m1_hmastlock               }),
-            .m_nx_hprot_i          ({m2_hprot,                   m1_hprot                   }),
-            .m_nx_hsize_i          ({m2_hsize,                   m1_hsize                   }),
-            .m_nx_htrans_i         ({m2_htrans,                  m1_htrans                  }),
-            .m_nx_hwdata_i         ({m2_hwdata,                  m1_hwdata                  }),
-            .m_nx_hwrite_i         ({m2_hwrite,                  m1_hwrite                  }),
+            .m_nx_haddr_i          ({m2_haddr_d & {32{m2_hready}}, m1_haddr_d & {32{m1_hready}} }), // Mask the address with Hready to constrain a bit more the simulation (i.e. haddr only needs to be valid during the last cycle of the address phase)
+            .m_nx_hauser_i         ({m2_hauser_d,                  m1_hauser_d                  }),
+            .m_nx_hburst_i         ({m2_hburst_d,                  m1_hburst_d                  }),
+            .m_nx_hmaster_i        ({m2_hmaster_tag_d,             m1_hmaster_tag_d             }),
+            .m_nx_hmastlock_i      ({m2_hmastlock_d,               m1_hmastlock_d               }),
+            .m_nx_hprot_i          ({m2_hprot_d,                   m1_hprot_d                   }),
+            .m_nx_hsize_i          ({m2_hsize_d,                   m1_hsize_d                   }),
+            .m_nx_htrans_i         ({m2_htrans_d,                  m1_htrans_d                  }),
+            .m_nx_hwdata_i         ({m2_hwdata_d,                  m1_hwdata_d                  }),
+            .m_nx_hwrite_i         ({m2_hwrite_d,                  m1_hwrite_d                  }),
 
-            .m_nx_hrdata_o         ({m2_hrdata,                  m1_hrdata                  }),
-            .m_nx_hready_o         ({m2_hready,                  m1_hready                  }),
-            .m_nx_hresp_o          ({m2_hresp,                   m1_hresp                   }),
-        
+            .m_nx_hrdata_o         ({m2_hrdata_dut,                  m1_hrdata_dut                  }),
+            .m_nx_hready_o         ({m2_hready_dut,                  m1_hready_dut                  }),
+            .m_nx_hresp_o          ({m2_hresp_dut,                   m1_hresp_dut                   }),
+
         // ARBITER INTERFACE for NON-EXECUTABLE MANAGERS
             .m_nx_grant_i          ( m_grant[NR_M-2:0]                                       ),
             .m_nx_request_o        ( m_request[NR_M-2:0]                                     ),
@@ -636,7 +762,7 @@ initial
         // ADDRESS DECODER INTERFACES (FOR ALL SUBORDINATES)
             .s_decoder_1hot_i      ( s_decoder_1hot                                          ),
             .s_decoder_addr_o      ( s_decoder_addr                                          ),
-        
+
         // ADDRESS DECODER INTERFACES (FOR EXECUTABLE SUBORDINATES ONLY)
             .s_x_decoder_1hot_i    ( s_x_decoder_1hot[NR_S_X-1:0]                            ),
             .s_x_decoder_addr_o    ( s_x_decoder_addr                                        ),
@@ -663,7 +789,7 @@ initial
             .s_nx_hrdata_i         ({s3_hrdata,    s2_hrdata                                }),
             .s_nx_hreadyout_i      ({s3_hreadyout, s2_hreadyout                             }),
             .s_nx_hresp_i          ({s3_hresp,     s2_hresp                                 }),
-        
+
             .s_nx_haddr_o          ({s3_haddr,     s2_haddr                                 }),
             .s_nx_hauser_o         ({s3_hauser,    s2_hauser                                }),
             .s_nx_hburst_o         ({s3_hburst,    s2_hburst                                }),
@@ -687,46 +813,48 @@ initial
         assign m_request[NR_M-1] = 1'b0;
 `else
         ahb_interconnect_generic #(
-            .NR_M         ( NR_M                    ),
-            .NR_S         ( NR_S                    ),
-            .HAUSER_W     ( HAUSER_W                ),
-            .ASYNC_RST_EN ( ASYNC_RST_EN            )
+            .NR_M         ( NR_M                           ),
+            .NR_S         ( NR_S                           ),
+            .HAUSER_W     ( HAUSER_W                       ),
+            .M_HMASTER_TAG( {4'h0, MGR1_HMASTER_TAG, 4'h0} ),
+            .ASYNC_RST_EN ( ASYNC_RST_EN                   )
         ) dut (
-        
+
         // AHB CLOCK & RESET
             .hclk_i                ( dut_hclk                                                ),
             .hresetn_i             ( hresetn                                                 ),
-        
-            .hclk_en_o             ( dut_hclk_en                                             ),
-        
-        // AHB MANAGER INTERFACES
-            .m_haddr_i             ({m2_haddr & {32{m2_hready}}, m1_haddr & {32{m1_hready}}, m0_haddr & {32{m0_hready}}}), // Mask the address with Hready to constrain a bit more the simulation (i.e. haddr only needs to be valid during the last cycle of the address phase)
-            .m_hauser_i            ({m2_hauser,                  m1_hauser,                  m0_hauser                 }),
-            .m_hburst_i            ({m2_hburst,                  m1_hburst,                  m0_hburst                 }),
-            .m_hmastlock_i         ({m2_hmastlock,               m1_hmastlock,               m0_hmastlock              }),
-            .m_hprot_i             ({m2_hprot,                   m1_hprot,                   m0_hprot                  }),
-            .m_hsize_i             ({m2_hsize,                   m1_hsize,                   m0_hsize                  }),
-            .m_htrans_i            ({m2_htrans,                  m1_htrans,                  m0_htrans                 }),
-            .m_hwdata_i            ({m2_hwdata,                  m1_hwdata,                  m0_hwdata                 }),
-            .m_hwrite_i            ({m2_hwrite,                  m1_hwrite,                  m0_hwrite                 }),
 
-            .m_hrdata_o            ({m2_hrdata,                  m1_hrdata,                  m0_hrdata                 }),
-            .m_hready_o            ({m2_hready,                  m1_hready,                  m0_hready                 }),
-            .m_hresp_o             ({m2_hresp,                   m1_hresp,                   m0_hresp                  }),
-        
+            .hclk_en_o             ( dut_hclk_en                                             ),
+
+        // AHB MANAGER INTERFACES
+            .m_haddr_i             ({m2_haddr_d & {32{m2_hready}}, m1_haddr_d & {32{m1_hready}}, m0_haddr_d & {32{m0_hready}}}), // Mask the address with Hready to constrain a bit more the simulation (i.e. haddr only needs to be valid during the last cycle of the address phase)
+            .m_hauser_i            ({m2_hauser_d,                  m1_hauser_d,                  m0_hauser_d                 }),
+            .m_hburst_i            ({m2_hburst_d,                  m1_hburst_d,                  m0_hburst_d                 }),
+            .m_hmaster_i           ({m2_hmaster_tag_d,             m1_hmaster_tag_d,             m0_hmaster_tag_d            }),
+            .m_hmastlock_i         ({m2_hmastlock_d,               m1_hmastlock_d,               m0_hmastlock_d              }),
+            .m_hprot_i             ({m2_hprot_d,                   m1_hprot_d,                   m0_hprot_d                  }),
+            .m_hsize_i             ({m2_hsize_d,                   m1_hsize_d,                   m0_hsize_d                  }),
+            .m_htrans_i            ({m2_htrans_d,                  m1_htrans_d,                  m0_htrans_d                 }),
+            .m_hwdata_i            ({m2_hwdata_d,                  m1_hwdata_d,                  m0_hwdata_d                 }),
+            .m_hwrite_i            ({m2_hwrite_d,                  m1_hwrite_d,                  m0_hwrite_d                 }),
+
+            .m_hrdata_o            ({m2_hrdata_dut,                  m1_hrdata_dut,                  m0_hrdata_dut                 }),
+            .m_hready_o            ({m2_hready_dut,                  m1_hready_dut,                  m0_hready_dut                 }),
+            .m_hresp_o             ({m2_hresp_dut,                   m1_hresp_dut,                   m0_hresp_dut                  }),
+
         // ARBITER INTERFACES
             .m_grant_i             ( m_grant                                                 ),
             .m_request_o           ( m_request                                               ),
-        
+
         // ADDRESS DECODER INTERFACES
             .s_decoder_1hot_i      ( s_decoder_1hot                                          ),
             .s_decoder_addr_o      ( s_decoder_addr                                          ),
-        
+
         // AHB SUBORDINATE INTERFACES
             .s_hrdata_i            ({s3_hrdata,    s2_hrdata,    s1_hrdata,    s0_hrdata    }),
             .s_hreadyout_i         ({s3_hreadyout, s2_hreadyout, s1_hreadyout, s0_hreadyout }),
             .s_hresp_i             ({s3_hresp,     s2_hresp,     s1_hresp,     s0_hresp     }),
-        
+
             .s_haddr_o             ({s3_haddr,     s2_haddr,     s1_haddr,     s0_haddr     }),
             .s_hauser_o            ({s3_hauser,    s2_hauser,    s1_hauser,    s0_hauser    }),
             .s_hburst_o            ({s3_hburst,    s2_hburst,    s1_hburst,    s0_hburst    }),
@@ -778,11 +906,11 @@ ahb_protocol_checker ahb_protocol_checker_m0 (
     .bus_name_i           ( {496'h0, "M0"}              ),
     .hclk_i               ( free_clk                    ),
     .hresetn_i            ( hresetn                     ),
-    .haddr_i              ( m0_haddr                    ),
-    .htrans_i             ( m0_htrans                   ),
-    .hsize_i              ( m0_hsize                    ),
-    .hwrite_i             ( m0_hwrite                   ),
-    .hburst_i             ( m0_hburst                   ),
+    .haddr_i              ( m0_haddr_d                    ),
+    .htrans_i             ( m0_htrans_d                   ),
+    .hsize_i              ( m0_hsize_d                    ),
+    .hwrite_i             ( m0_hwrite_d                   ),
+    .hburst_i             ( m0_hburst_d                   ),
     .hready_i             ( m0_hready                   ),
     .hresp_i              ( m0_hresp                    ),
     .checker_enable_i     ( protocol_checker_enable     )
@@ -792,11 +920,11 @@ ahb_protocol_checker ahb_protocol_checker_m1 (
     .bus_name_i           ( {496'h0, "M1"}              ),
     .hclk_i               ( free_clk                    ),
     .hresetn_i            ( hresetn                     ),
-    .haddr_i              ( m1_haddr                    ),
-    .htrans_i             ( m1_htrans                   ),
-    .hsize_i              ( m1_hsize                    ),
-    .hwrite_i             ( m1_hwrite                   ),
-    .hburst_i             ( m1_hburst                   ),
+    .haddr_i              ( m1_haddr_d                    ),
+    .htrans_i             ( m1_htrans_d                   ),
+    .hsize_i              ( m1_hsize_d                    ),
+    .hwrite_i             ( m1_hwrite_d                   ),
+    .hburst_i             ( m1_hburst_d                   ),
     .hready_i             ( m1_hready                   ),
     .hresp_i              ( m1_hresp                    ),
     .checker_enable_i     ( protocol_checker_enable     )
@@ -806,11 +934,11 @@ ahb_protocol_checker ahb_protocol_checker_m2 (
     .bus_name_i           ( {496'h0, "M2"}              ),
     .hclk_i               ( free_clk                    ),
     .hresetn_i            ( hresetn                     ),
-    .haddr_i              ( m2_haddr                    ),
-    .htrans_i             ( m2_htrans                   ),
-    .hsize_i              ( m2_hsize                    ),
-    .hwrite_i             ( m2_hwrite                   ),
-    .hburst_i             ( m2_hburst                   ),
+    .haddr_i              ( m2_haddr_d                    ),
+    .htrans_i             ( m2_htrans_d                   ),
+    .hsize_i              ( m2_hsize_d                    ),
+    .hwrite_i             ( m2_hwrite_d                   ),
+    .hburst_i             ( m2_hburst_d                   ),
     .hready_i             ( m2_hready                   ),
     .hresp_i              ( m2_hresp                    ),
     .checker_enable_i     ( protocol_checker_enable     )
@@ -826,6 +954,9 @@ ahb_protocol_checker ahb_protocol_checker_m2 (
 //
 //   GENERIC :  single 3-master arbiter; for any slave
 //                m_grant[i]==1  =>  expected = i
+//
+//   In every variant M1's expectation also carries its tag bit, recomputed
+//   from the checked slave's haddr[2] (see MGR1_HMASTER_TAG).
 //
 //   HIPERF  :  NX-side slaves (s2, s3): NX arbiter grants M1/M2 via
 //                m_grant[1:0]   =>  expected = grant+1
@@ -855,6 +986,15 @@ reg            [3:0] exp_hm_nx;        // NX-side expected hmaster
 reg            [3:0] exp_hm_generic;   // generic-variant expected hmaster
 reg            [3:0] exp_hm_x_s0, exp_hm_x_s1;  // HIPERF X-slave expected
 
+function [3:0] m1_tagged;
+    input      [3:0] id;
+    input            is_m1;
+    input     [31:0] haddr;
+    begin
+        m1_tagged = id | ({4{is_m1 & haddr[2]}} & MGR1_HMASTER_TAG);
+    end
+endfunction
+
 task check_hmaster;
     input  [8*8-1:0] slave_name;       // up to 8-char label
     input      [3:0] observed;
@@ -870,8 +1010,8 @@ task check_hmaster;
     end
 endtask
 
-// Loose check: hmaster must be a valid master ID (∈ {0, 1, 2} for our
-// 3-master TB).  Used for HIPERF X-side slaves where the two-level
+// Loose check: hmaster must be a valid master ID (∈ {0, 1, 2}, or 9 for
+// M1 with its tag set, in our 3-master TB).  Used for HIPERF X-side slaves where the two-level
 // routing (NX manager_mux → per-X-slave manager_mux) with independent
 // m_aph_pending at each level makes the exact expected-value formula
 // too brittle for a passive monitor.
@@ -880,8 +1020,8 @@ task check_hmaster_in_range;
     input      [3:0] observed;
     begin
         cov_hmaster_checks = cov_hmaster_checks + 1;
-        if (!((observed == 4'h0) || (observed == 4'h1) || (observed == 4'h2))) begin
-            $display("ERROR-VERILOG: [HMASTER out of range] slave=%0s observed=0x%h (valid: 0..2) (t=%t)",
+        if (!((observed == 4'h0) || (observed == 4'h1) || (observed == 4'h2) || (observed == 4'h9))) begin
+            $display("ERROR-VERILOG: [HMASTER out of range] slave=%0s observed=0x%h (valid: 0..2, 9) (t=%t)",
                      slave_name, observed, $time);
             error              = error              + 1;
             cov_hmaster_fails  = cov_hmaster_fails  + 1;
@@ -890,12 +1030,12 @@ task check_hmaster_in_range;
 endtask
 
 always @(posedge free_clk) begin
-    if (hresetn && hmaster_checker_enable) begin
+    if (hresetn && tb_rst_done && hmaster_checker_enable) begin
 `ifdef HIPERF
         // NX side: strict — top-level NX arbiter (m_grant[1:0]) determines hmaster
         exp_hm_nx = m_grant[0] ? 4'h1 : (m_grant[1] ? 4'h2 : 4'h0);
-        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, exp_hm_nx);
-        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, exp_hm_nx);
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, m1_tagged(exp_hm_nx, m_grant[0], s2_haddr));
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, m1_tagged(exp_hm_nx, m_grant[0], s3_haddr));
         // X side: loose (any valid master ID); two-level routing with caching
         // makes a strict prediction non-trivial.
         if (s0_hsel & s0_hready & s0_htrans[1]) check_hmaster_in_range("s0", s0_hmaster);
@@ -903,15 +1043,109 @@ always @(posedge free_clk) begin
 `else `ifdef FUSED
         // FUSED: only NX-side hmaster is externally observable
         exp_hm_nx = m_grant[0] ? 4'h1 : (m_grant[1] ? 4'h2 : 4'h0);
-        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, exp_hm_nx);
-        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, exp_hm_nx);
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, m1_tagged(exp_hm_nx, m_grant[0], s2_haddr));
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, m1_tagged(exp_hm_nx, m_grant[0], s3_haddr));
 `else
         // GENERIC: single 3-master arbiter, strict check on all slaves
         exp_hm_generic = m_grant[0] ? 4'h0 : (m_grant[1] ? 4'h1 : (m_grant[2] ? 4'h2 : 4'h0));
-        if (s0_hsel & s0_hready & s0_htrans[1]) check_hmaster("s0", s0_hmaster, exp_hm_generic);
-        if (s1_hsel & s1_hready & s1_htrans[1]) check_hmaster("s1", s1_hmaster, exp_hm_generic);
-        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, exp_hm_generic);
-        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, exp_hm_generic);
+        if (s0_hsel & s0_hready & s0_htrans[1]) check_hmaster("s0", s0_hmaster, m1_tagged(exp_hm_generic, m_grant[1], s0_haddr));
+        if (s1_hsel & s1_hready & s1_htrans[1]) check_hmaster("s1", s1_hmaster, m1_tagged(exp_hm_generic, m_grant[1], s1_haddr));
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_hmaster("s2", s2_hmaster, m1_tagged(exp_hm_generic, m_grant[1], s2_haddr));
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_hmaster("s3", s3_hmaster, m1_tagged(exp_hm_generic, m_grant[1], s3_haddr));
+`endif
+`endif
+    end
+end
+
+
+//--------------------------------------------------------------------
+// PRIVILEGE SIDEBAND CHECKER
+//
+// hauser carries the aRVern hsmode bit and hprot[1] the privileged bit, so
+// together they are how every privilege-filtering IP downstream learns the
+// access mode. The fabric must present the GRANTED manager's pair to the
+// selected subordinate, unchanged, on every layer. Nothing else in this bench
+// looks at them: without this check a fabric that dropped, crossed or stuck
+// the sideband would pass the entire regression, and the filtering it feeds
+// would silently police the wrong master.
+//
+// Checked at address-phase commit (hsel & hready & htrans[1]), the same
+// instant the HMASTER checker uses. Expectations are per-variant for the same
+// reason: the X side of HIPERF routes through two levels with caching, so it
+// is checked loosely (must match SOME manager's pair) while the NX side is
+// strict (must match the granted one).
+//--------------------------------------------------------------------
+
+reg                  sideband_checker_enable;
+initial              sideband_checker_enable = 1'b1;
+
+integer              cov_sideband_checks;
+integer              cov_sideband_fails;
+initial begin
+    cov_sideband_checks = 0;
+    cov_sideband_fails  = 0;
+end
+
+reg [HAUSER_W-1:0]   exp_hauser_nx;
+reg            [3:0] exp_hprot_nx;
+
+task check_sideband;
+    input  [8*8-1:0] slave_name;
+    input [HAUSER_W-1:0] obs_hauser;
+    input      [3:0] obs_hprot;
+    input [HAUSER_W-1:0] exp_hauser;
+    input      [3:0] exp_hprot;
+    begin
+        cov_sideband_checks = cov_sideband_checks + 1;
+        if ((obs_hauser !== exp_hauser) || (obs_hprot !== exp_hprot)) begin
+            $display("ERROR: sideband mis-routed on %0s -- hauser %b/%b hprot %h/%h (obs/exp) %t ns",
+                     slave_name, obs_hauser, exp_hauser, obs_hprot, exp_hprot, $time);
+            error               = error               + 1;
+            cov_sideband_fails  = cov_sideband_fails  + 1;
+        end
+    end
+endtask
+
+// Loose form: the pair must belong to SOME manager. Catches a dropped or stuck
+// sideband, and any value the fabric invented, without predicting the routing.
+task check_sideband_any;
+    input  [8*8-1:0] slave_name;
+    input [HAUSER_W-1:0] obs_hauser;
+    input      [3:0] obs_hprot;
+    begin
+        cov_sideband_checks = cov_sideband_checks + 1;
+        if (!(((obs_hauser === m0_hauser) && (obs_hprot === MGR0_HPROT)) ||
+              ((obs_hauser === m1_hauser) && (obs_hprot === MGR1_HPROT)) ||
+              ((obs_hauser === m2_hauser) && (obs_hprot === MGR2_HPROT)))) begin
+            $display("ERROR: sideband on %0s matches no manager -- hauser=%b hprot=%h %t ns",
+                     slave_name, obs_hauser, obs_hprot, $time);
+            error               = error               + 1;
+            cov_sideband_fails  = cov_sideband_fails  + 1;
+        end
+    end
+endtask
+
+always @(posedge free_clk) begin
+    if (hresetn && tb_rst_done && sideband_checker_enable) begin
+`ifdef HIPERF
+        exp_hauser_nx = m_grant[0] ? m1_hauser  : (m_grant[1] ? m2_hauser  : m1_hauser);
+        exp_hprot_nx  = m_grant[0] ? MGR1_HPROT : (m_grant[1] ? MGR2_HPROT : MGR1_HPROT);
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_sideband("s2", s2_hauser, s2_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_sideband("s3", s3_hauser, s3_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s0_hsel & s0_hready & s0_htrans[1]) check_sideband_any("s0", s0_hauser, s0_hprot);
+        if (s1_hsel & s1_hready & s1_htrans[1]) check_sideband_any("s1", s1_hauser, s1_hprot);
+`else `ifdef FUSED
+        exp_hauser_nx = m_grant[0] ? m1_hauser  : (m_grant[1] ? m2_hauser  : m1_hauser);
+        exp_hprot_nx  = m_grant[0] ? MGR1_HPROT : (m_grant[1] ? MGR2_HPROT : MGR1_HPROT);
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_sideband("s2", s2_hauser, s2_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_sideband("s3", s3_hauser, s3_hprot, exp_hauser_nx, exp_hprot_nx);
+`else
+        exp_hauser_nx = m_grant[0] ? m0_hauser  : (m_grant[1] ? m1_hauser  : (m_grant[2] ? m2_hauser  : m0_hauser));
+        exp_hprot_nx  = m_grant[0] ? MGR0_HPROT : (m_grant[1] ? MGR1_HPROT : (m_grant[2] ? MGR2_HPROT : MGR0_HPROT));
+        if (s0_hsel & s0_hready & s0_htrans[1]) check_sideband("s0", s0_hauser, s0_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s1_hsel & s1_hready & s1_htrans[1]) check_sideband("s1", s1_hauser, s1_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s2_hsel & s2_hready & s2_htrans[1]) check_sideband("s2", s2_hauser, s2_hprot, exp_hauser_nx, exp_hprot_nx);
+        if (s3_hsel & s3_hready & s3_htrans[1]) check_sideband("s3", s3_hauser, s3_hprot, exp_hauser_nx, exp_hprot_nx);
 `endif
 `endif
     end
@@ -1326,10 +1560,81 @@ initial // Timeout
    `endif
   end
 
+//--------------------------------------------------------------------
+// Fabric invariant checker: at most one manager owns a data phase per
+// bus (Architectural Constraint #2). Two m_dph_ongoing bits set at once
+// means two masters share hwdata/hrdata/hresp -- silent corruption even
+// if the data compare happens to pass.
+//--------------------------------------------------------------------
+integer dph_viol_cnt;
+initial dph_viol_cnt = 0;
+
+`ifdef FUSED
+wire [1:0] dph_owners = { dut.ahb_manager_mux_inst_nx.AHB_MANAGER_IF[1].ahb_manager_if_inst.m_dph_ongoing,
+                          dut.ahb_manager_mux_inst_nx.AHB_MANAGER_IF[0].ahb_manager_if_inst.m_dph_ongoing };
+`elsif HIPERF
+wire [1:0] dph_owners = { dut.ahb_manager_mux_inst_nx.AHB_MANAGER_IF[1].ahb_manager_if_inst.m_dph_ongoing,
+                          dut.ahb_manager_mux_inst_nx.AHB_MANAGER_IF[0].ahb_manager_if_inst.m_dph_ongoing };
+`else
+wire [2:0] dph_owners = { dut.ahb_manager_mux_inst.AHB_MANAGER_IF[2].ahb_manager_if_inst.m_dph_ongoing,
+                          dut.ahb_manager_mux_inst.AHB_MANAGER_IF[1].ahb_manager_if_inst.m_dph_ongoing,
+                          dut.ahb_manager_mux_inst.AHB_MANAGER_IF[0].ahb_manager_if_inst.m_dph_ongoing };
+`endif
+
+always @(posedge dut_hclk)
+   if (hresetn && tb_rst_done && (dph_owners & (dph_owners - 1)) != 0) begin      // more than one bit set
+      dph_viol_cnt = dph_viol_cnt + 1;
+      if (dph_viol_cnt <= 8)
+         $display("ERROR: two managers own a data phase at once (m_dph_ongoing = %b) %t", dph_owners, $time);
+   end
+
+`ifdef HIPERF
+// The same invariant on each executable subordinate's level-2 bus, where the
+// executable manager and the non-executable sub-fabric contend.
+wire [1:0] dph_owners_x0 = { dut.AHB_MANAGER_MUX_X[0].ahb_manager_mux_inst_x.AHB_MANAGER_IF[1].ahb_manager_if_inst.m_dph_ongoing,
+                             dut.AHB_MANAGER_MUX_X[0].ahb_manager_mux_inst_x.AHB_MANAGER_IF[0].ahb_manager_if_inst.m_dph_ongoing };
+wire [1:0] dph_owners_x1 = { dut.AHB_MANAGER_MUX_X[1].ahb_manager_mux_inst_x.AHB_MANAGER_IF[1].ahb_manager_if_inst.m_dph_ongoing,
+                             dut.AHB_MANAGER_MUX_X[1].ahb_manager_mux_inst_x.AHB_MANAGER_IF[0].ahb_manager_if_inst.m_dph_ongoing };
+always @(posedge dut_hclk)
+   if (hresetn && tb_rst_done && (&dph_owners_x0 || &dph_owners_x1)) begin
+      dph_viol_cnt = dph_viol_cnt + 1;
+      if (dph_viol_cnt <= 8)
+         $display("ERROR: two channels own a data phase on an executable subordinate (s0 %b, s1 %b) %t",
+                  dph_owners_x0, dph_owners_x1, $time);
+   end
+`endif
+
+// Subordinate-side HREADY protocol violations (see ahb_waitstate_inserter.v,
+// "a stalling subordinate must see HREADY=0"). Counted inside the wait-state
+// models; folded into `error` at the end of the test.
+integer hready_viol_total;
+task collect_hready_violations;
+  begin
+     hready_viol_total = 0;
+`ifndef FUSED
+     hready_viol_total = hready_viol_total + ahb_waitstate_inserter_rom_inst.hready_viol_cnt
+                                          + ahb_waitstate_inserter_sram_inst.hready_viol_cnt;
+`endif
+     hready_viol_total = hready_viol_total + ahb_waitstate_inserter_periph0_inst.hready_viol_cnt
+                                          + ahb_waitstate_inserter_periph1_inst.hready_viol_cnt;
+     if (hready_viol_total != 0)
+       begin
+          $display("ERROR: %0d cycle(s) where a stalling subordinate was handed hready=1", hready_viol_total);
+          error = error + hready_viol_total;
+       end
+     if (dph_viol_cnt != 0)
+       begin
+          $display("ERROR: %0d cycle(s) with more than one data-phase owner on a bus", dph_viol_cnt);
+          error = error + dph_viol_cnt;
+       end
+  end
+endtask
+
 initial // Normal end of test
   begin
      #10;
      @(posedge stimulus_done);
+     collect_hready_violations;
 
      $display(" ===============================================");
      if (error!=0)
@@ -1393,13 +1698,13 @@ initial // Normal end of test
    task check_mem_value;
       input integer address;
       input integer expected_value;
-        
+
       reg [511:0] formatted_string;
       integer i;
       begin
         #1;
         if (sram_inst0.mem[address] !== expected_value) begin
-          $display("ERROR: Memory check   -- address: 0x%h -- read: 0x%h / expected: 0x%h %t ns", address, sram_inst0.mem[address], expected_value, $time); 
+          $display("ERROR: Memory check   -- address: 0x%h -- read: 0x%h / expected: 0x%h %t ns", address, sram_inst0.mem[address], expected_value, $time);
           error = error+1;
         end else begin
           $display("PASS:  Memory check   -- address: 0x%h -- value: 0x%h %t ns", address, sram_inst0.mem[address], $time);
@@ -1410,13 +1715,13 @@ initial // Normal end of test
     task check_rom_value;
         input integer address;
         input integer expected_value;
-          
+
         reg [511:0] formatted_string;
         integer i;
         begin
           #1;
           if (rom_inst0.mem[address] !== expected_value) begin
-            $display("ERROR: ROM check   -- address: 0x%h -- read: 0x%h / expected: 0x%h %t ns", address, rom_inst0.mem[address], expected_value, $time); 
+            $display("ERROR: ROM check   -- address: 0x%h -- read: 0x%h / expected: 0x%h %t ns", address, rom_inst0.mem[address], expected_value, $time);
             error = error+1;
           end else begin
             $display("PASS:  ROM check   -- address: 0x%h -- value: 0x%h %t ns", address, rom_inst0.mem[address], $time);
@@ -1428,7 +1733,7 @@ initial // Normal end of test
       input integer periph_number;
       input integer reg_number;
       input integer expected_value;
-        
+
       reg [511:0] formatted_string;
       reg  [31:0] selected_reg;
       begin
@@ -1450,7 +1755,7 @@ initial // Normal end of test
               12: selected_reg = periph0_reg_12_in ;
               13: selected_reg = periph0_reg_13_in ;
               14: selected_reg = periph0_reg_14_in ;
-              15: selected_reg = periph0_reg_15_in ; 
+              15: selected_reg = periph0_reg_15_in ;
               default: begin
                   selected_reg = 32'h00000000;
               end
@@ -1472,7 +1777,7 @@ initial // Normal end of test
               12: selected_reg = periph1_reg_12_in ;
               13: selected_reg = periph1_reg_13_in ;
               14: selected_reg = periph1_reg_14_in ;
-              15: selected_reg = periph1_reg_15_in ; 
+              15: selected_reg = periph1_reg_15_in ;
               default: begin
                   selected_reg = 32'h00000000;
               end
@@ -1480,7 +1785,7 @@ initial // Normal end of test
         end
 
         if (selected_reg !== expected_value) begin
-          $display("ERROR: Periph check   -- periph: %d -- reg_number: %d -- read: 0x%h / expected: 0x%h %t ns", periph_number, reg_number, selected_reg, expected_value, $time); 
+          $display("ERROR: Periph check   -- periph: %d -- reg_number: %d -- read: 0x%h / expected: 0x%h %t ns", periph_number, reg_number, selected_reg, expected_value, $time);
           error = error+1;
         end else begin
           $display("PASS:  Periph check   -- periph: %d -- reg_number: %d -- value: 0x%h %t ns", periph_number, reg_number, selected_reg, $time);
@@ -1504,7 +1809,7 @@ initial // Normal end of test
               12: periph0_reg_12_in = value;
               13: periph0_reg_13_in = value;
               14: periph0_reg_14_in = value;
-              15: periph0_reg_15_in = value; 
+              15: periph0_reg_15_in = value;
               default: begin
               end
             endcase
@@ -1517,12 +1822,23 @@ initial // Normal end of test
               12: periph1_reg_12_in = value;
               13: periph1_reg_13_in = value;
               14: periph1_reg_14_in = value;
-              15: periph1_reg_15_in = value; 
+              15: periph1_reg_15_in = value;
               default: begin
               end
             endcase
         end
       end
    endtask
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once reset is released: the Verilator coverage flow starts
+// every flop at 1 so the asynchronous resets see an edge, and the reset driving them
+// to 0 would otherwise count as a toggle of every bit.
+initial begin
+    wait (hresetn === 1'b0);
+    @(posedge hresetn);
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 endmodule

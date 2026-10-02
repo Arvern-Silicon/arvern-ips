@@ -1,0 +1,16 @@
+{signal: [
+  {name: 'clk_i (SoC osc)', wave: '0.........p.p.p.p.'},
+  {},
+  {name: 'TCKC (probe)',    wave: '0p.p.p.p.p.p.p.p.p.'},
+  {name: 'dbg_wakeup_o',    wave: '01010101010101010.'},
+  {},
+  {name: 'SoC clk request', wave: '0..1..............'},
+  {name: 'escape detector', wave: '3.........4.......',
+   data: ['blind (no clk_i)','live']}
+],
+  head: {text: 'Cold attach: dbg_wakeup_o works with the oscillator stopped'},
+  foot: {text: ['tspan',
+    'The escape detector is oversampled on clk_i, so with the oscillator gated a probe would be invisible. dbg_wakeup_o is a flop in the PROBE-CLOCK',
+    ['tspan', {x: 760, dy: 14}, 'domain, so it keeps toggling regardless and the SoC always-on controller starts clk_i. A toggle, not a level: nothing here could clear a level.']]},
+  config: {hscale: 2}
+}

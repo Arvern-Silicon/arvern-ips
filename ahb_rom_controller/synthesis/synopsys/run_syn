@@ -11,14 +11,21 @@
 # Full license text is available in the LICENSE file at the repository root.
 #----------------------------------------------------------------------------
 # File Name          : run_syn
-# Module Description : Synthesis launcher. Parses CLI flags (-lib, -noquit),
-#                      validates the library flavor, and invokes dc_shell on
-#                      synthesis.tcl.
+# Module Description : Synthesis launcher. Parses CLI flags (-lib, -noquit,
+#                      -rtl_config, -rtl_sweep), validates the library flavor,
+#                      and invokes dc_shell on synthesis.tcl.
+#
+# RTL CONFIGS: the parameter set comes from sim/rtl_sim/bin/rtl_configs.py --
+# the same one the simulation sweep and the lint sweep use, so the
+# synchronous-reset build (different DFT declarations) is synthesised
+# and DFT-checked, not just the RTL defaults.
 #----------------------------------------------------------------------------
 
 # Parse command line arguments
 NO_QUIT=0
 LIB_FLAVOR="lib_default"
+RTL_CONFIG=""            # empty = RTL defaults
+RTL_SWEEP=0              # 1 = build every config in rtl_configs.py
 while [[ $# -gt 0 ]]; do
     case $1 in
         -noquit|--noquit|--interactive|-i)
@@ -29,15 +36,89 @@ while [[ $# -gt 0 ]]; do
             LIB_FLAVOR="$2"
             shift 2
             ;;
+        -rtl_config|--rtl_config)
+            RTL_CONFIG="$2"
+            shift 2
+            ;;
+        -rtl_sweep|--rtl_sweep)
+            RTL_SWEEP=1
+            shift
+            ;;
+        -list_configs|--list_configs)
+            python3 ../../sim/rtl_sim/bin/gen_rtl_params.py --list-configs
+            exit 0
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [-noquit|--interactive|-i] [-lib <flavor>]"
+            echo "Usage: $0 [-noquit|-i] [-lib <flavor>] [-rtl_config N|NAME] [-rtl_sweep] [-list_configs]"
             echo "  -noquit, --noquit, --interactive, -i : Keep dc_shell open after synthesis"
             echo "  -lib <flavor>                        : Select library flavor (default: lib_default)"
+            echo "  -rtl_config N|NAME                   : Build one config from sim/rtl_sim/bin/rtl_configs.py"
+            echo "  -rtl_sweep                           : Build every config; summary table only"
+            echo "  -list_configs                        : List the config set and exit"
             exit 1
             ;;
     esac
 done
+
+# -rtl_sweep: re-invoke ourselves once per config and summarise. Each build gets
+# its own results snapshot under results_sweep/<label>/ so a failure can be
+# investigated without re-running the whole set.
+if [[ $RTL_SWEEP -eq 1 ]]; then
+    SWEEP_DIR=./results_sweep
+    mkdir -p "$SWEEP_DIR"
+    SUMMARY="$SWEEP_DIR/sweep_summary.log"
+    : > "$SUMMARY"
+    SWEEP_START=$SECONDS
+    fail=0
+    while IFS=$'\t' read -r idx label params; do
+        [[ "$idx" =~ ^[0-9]+$ ]] || continue
+        printf '  [%2s] %-18s ' "$idx" "$label"
+        if "$0" -lib "$LIB_FLAVOR" -rtl_config "$idx" > "$SWEEP_DIR/$label.log" 2>&1; then
+            # A build is only "clean" if timing closed AND no endpoint was left
+            # unconstrained AND DFT found nothing -- the last two do not fail the
+            # tool, which is exactly why they are checked here.
+            # NOTE: `grep -c` prints 0 AND exits 1 when there are no matches, so
+            # a `|| echo 0` fallback appends a SECOND zero and every field
+            # silently becomes the two-line string "0\n0". Count lines instead,
+            # and squeeze to one token.
+            viol=$(grep -h "slack (VIOLATED" ./results/report.full_paths.max ./results/report.full_paths.min 2>/dev/null | wc -l | tr -d ' \n')   # worst setup/hold paths are always in these
+            # Clock outputs (*_clk_o, the hclk_i copy to the memory macro) are
+            # expected in the list; any other unconstrained endpoint is counted.
+            unc=$(awk '/not constrained for maximum delay/{f=1;next} f&&/^Information:/{f=0} f&&NF==1&&$1!~/^-+$/&&$1!="End"&&$1!~/_clk_o(\[[0-9]+\])?$/{n++} END{print n+0}' ./results/report.check_timing_pre 2>/dev/null)
+            dft=$(grep -oE "Total violations: [0-9]+" ./results/report.dft_drc 2>/dev/null | tail -1 | grep -oE "[0-9]+" | tr -d ' \n')
+            [[ -n "$viol" ]] || viol=0
+            [[ -n "$unc"  ]] || unc=0
+            [[ -n "$dft"  ]] || dft="-"
+            mkdir -p "$SWEEP_DIR/$label"
+            cp -f ./results/report.* "$SWEEP_DIR/$label/" 2>/dev/null
+            status="PASS"
+            if [[ "$viol" != "0" || "$unc" != "0" || "$dft" != "0" ]]; then status="CHECK"; fail=1; fi
+            printf 'timing_viol=%-4s unconstrained=%-3s dft_viol=%-3s %s\n' "$viol" "$unc" "$dft" "$status"
+            printf '%-18s timing_viol=%-4s unconstrained=%-3s dft_viol=%-3s %s\n' \
+                   "$label" "$viol" "$unc" "$dft" "$status" >> "$SUMMARY"
+        else
+            # Exit 2 is specifically "no licence", which is an environment
+            # problem and must not read as a design regression.
+            rc=$?
+            if [[ $rc -eq 2 ]]; then
+                echo "NO_LICENCE"
+                printf '%-18s NO_LICENCE (environment, not a design result)\n' "$label" >> "$SUMMARY"
+            else
+                echo "BUILD_FAIL"
+                printf '%-18s BUILD_FAIL\n' "$label" >> "$SUMMARY"
+            fi
+            fail=1
+        fi
+    done < <(python3 ../../sim/rtl_sim/bin/gen_rtl_params.py --list-configs)
+    SWEEP_ELAPSED=$(( SECONDS - SWEEP_START ))
+    echo ""
+    echo "================================================================"
+    cat "$SUMMARY"
+    echo "================================================================"
+    echo " Sweep done in $(( SWEEP_ELAPSED / 60 ))m $(( SWEEP_ELAPSED % 60 ))s -- detail in $SWEEP_DIR/"
+    exit $fail
+fi
 
 # Validate library flavor
 if [[ ! -f "./libraries/setup_${LIB_FLAVOR}.tcl" ]]; then
@@ -68,7 +149,30 @@ fi
 FLATTEN_PY="$(dirname "$(realpath "$0")")/../../sim/rtl_sim/bin/flatten_filelist.py"
 "$FLATTEN_PY" --format tcl ../../rtl/verilog/filelist.f ./submit_syn.tcl
 
+# Parameter overrides for read.tcl. Removing the file when no config is selected
+# matters: a stale rtl_params.tcl from a previous -rtl_config run would silently
+# apply to what looks like a default build.
+rm -f ./rtl_params.tcl
+if [[ -n "$RTL_CONFIG" ]]; then
+    CFG_LABEL=$(python3 ../../sim/rtl_sim/bin/gen_rtl_params.py --rtl-config "$RTL_CONFIG" -o ./rtl_params.tcl) || exit 1
+    echo "RTL config: $CFG_LABEL"
+fi
+
+# PIPESTATUS, not $?: piping into tee would otherwise report tee's exit status
+# and a licence failure ("Fatal: Design Compiler is not enabled", DCSH-1) would
+# look like a successful build that merely produced no reports.
 dc_shell-t -f synthesis.tcl | tee ./results/synthesis.log
+DC_STATUS=${PIPESTATUS[0]}
+
+if [[ $DC_STATUS -ne 0 ]] || [[ ! -f ./results/${DESIGN_NAME:-ahb_rom_controller}.gate.v ]]; then
+    echo ""
+    if grep -q "is not enabled\|not licensed" ./results/synthesis.log 2>/dev/null; then
+        echo "ERROR: synthesis did not run -- Synopsys licence unavailable (see results/synthesis.log)"
+        exit 2      # distinct from a real synthesis failure
+    fi
+    echo "ERROR: synthesis failed (dc_shell status $DC_STATUS, no netlist produced)"
+    exit 1
+fi
 
 rm -rf ./clog*
 

@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# Optional pass selector so run_all can log each arbitration mode separately
+# (parse_results scores a log by a single "PASSED" line, so the two passes
+# must not share one log). No argument runs both, as before.
+PASS_SEL="${1:-both}"
+
 #----------------------------------------------------------------------------
 #          _    _           Family:    aRVern System IPs
 #         / \__/ \          Module:    run_fused_sram
@@ -60,13 +66,38 @@ if [ "$VERILOG_SIMULATOR" = "iverilog" ]; then
     FLATTEN_PY="$(dirname "$(realpath "$0")")/../bin/flatten_filelist.py"
     "$FLATTEN_PY" "$SUBMITFILE" ./submit_sim.f >/dev/null
     SUBMITFILE=./submit_sim.f
+if [ "$PASS_SEL" = "both" ] || [ "$PASS_SEL" = "rr" ]; then
 
+    # ------------------------------------------------------------------------
+    # Pass 1: round-robin (default arbitration)
+    # ------------------------------------------------------------------------
     iverilog -o simv -c $SUBMITFILE $NODUMP_FLAG -D SEED=$seed
     if [ $? -ne 0 ]; then
-        echo "[ERROR] Compilation failed."
+        echo "[ERROR] RR compilation failed."
         exit 1
     fi
     ./simv
+fi
+if [ "$PASS_SEL" = "both" ] || [ "$PASS_SEL" = "fixb" ]; then
+
+    # ------------------------------------------------------------------------
+    # Pass 2: FIXED_B_PRIO=1 (fixed Port-B priority)
+    #
+    # This is the arbiter the documentation warns can starve instruction fetch,
+    # and until now the unit bench could not even elaborate against it: the DUT
+    # took no parameter and the bench reached into dut.gen_arb_rr, which does
+    # not exist in the fixed branch. Tests that need both ports served fairly
+    # are guarded out with `ifndef FUSED_FIXED_B_PRIO; the rest exercise the
+    # fixed-B arbiter, and the Port-A wait bound is disabled because starving
+    # A is this mode's documented behaviour.
+    # ------------------------------------------------------------------------
+    iverilog -o simv_fixb -c $SUBMITFILE $NODUMP_FLAG -D SEED=$seed -D FUSED_FIXED_B_PRIO
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] Fixed-B compilation failed."
+        exit 1
+    fi
+    ./simv_fixb
+fi
 else
     echo "ERROR: Only iverilog is supported by this script."
     exit 1

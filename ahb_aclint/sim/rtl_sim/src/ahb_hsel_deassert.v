@@ -13,7 +13,7 @@
 // Module Description : A NONSEQ transfer presented while hsel_i=0 (another
 //                      slave selected on the shared bus) must NOT touch ACLINT
 //                      state and must not error -- aph_valid gates on hsel_i
-//                      (ahb_aclint.v:91). The TB derives hsel from the address
+//                      (ahb_aclint.v, aph_valid). The TB derives hsel from the address
 //                      window (haddr[31:16]==0x0040), so issuing a transfer at
 //                      an address OUTSIDE that window deasserts hsel while the
 //                      master still drives NONSEQ. Existing tests only deassert
@@ -34,7 +34,7 @@ initial
       // Seed in-window state: MSIP[0] = 1, MTIMECMP_LO[0] = 0xA5A5A5A5.
       ahb_write(1, MACHINE, 32'h00400000, 32'h00000001, 2, OK);
       ahb_write(1, MACHINE, 32'h00404000, 32'hA5A5A5A5, 2, OK);
-      repeat(60) @(posedge free_clk);   // let MTIMECMP CDC settle
+      repeat(60) @(posedge free_clk);   // let MTIMECMP reach the LF comparator
 
       // NONSEQ writes at out-of-window addresses (haddr[31:16] != 0x0040 ->
       // hsel=0). The DUT must ignore them: no access, OK response, no state

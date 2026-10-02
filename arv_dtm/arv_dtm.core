@@ -1,0 +1,71 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      arv_dtm.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration.  Native sim flow is under
+# sim/rtl_sim/.  arv_dtm_jtag is the top level: a JTAG Debug Transport Module
+# bridging a 4-wire TAP to the arvern Debug Module Interface (DMI) bus.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:arv_dtm:1.0
+description: RISC-V Debug Spec 1.0 JTAG Debug Transport Module (TAP + dtmcs/dmi + TCK<->hclk DMI CDC).
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/arv_dtm_dmi_master.v
+      - rtl/verilog/arv_dtm_rxfifo.v
+      - rtl/verilog/arv_dtm_cmd.v
+      - rtl/verilog/arv_dtm_tap.v              # Protocol-neutral TAP core (JTAG + cJTAG)
+      - rtl/verilog/arv_dtm_jtag.v             # JTAG DTM toplevel
+      - rtl/verilog/arv_dtm_cjtag.v            # cJTAG (IEEE 1149.7, OScan1) DTM toplevel
+      - rtl/verilog/arv_dtm_uart.v             # UART DTM toplevel
+      - rtl/verilog/arv_dtm_i2c.v              # I2C  DTM toplevel
+      - rtl/verilog/arv_dtm.v                  # Selectable transport wrapper (DTM_TYPE, generate)
+    depend:
+      - arvern:ips:arv_primitives:1.0
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  # One lint target per transport toplevel.
+  lint_jtag:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_dtm_jtag
+
+  lint_cjtag:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_dtm_cjtag
+
+  lint_uart:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_dtm_uart
+
+  lint_i2c:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_dtm_i2c
+
+  # Selectable transport wrapper (build-time DTM_TYPE picks JTAG/UART/I2C/cJTAG).
+  lint_wrapper:
+    <<: *default
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: arv_dtm

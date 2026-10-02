@@ -21,31 +21,49 @@
 //
 // ADDRESS MAP (16-bit haddr_i, byte address):
 //   0x0000 - 0x3FFF  MSWI
-//   0x4000 - 0x7FFF  MTIMER
-//   0x8000 - 0xBFFF  reserved (RAZ/WI)
+//   0x4000 - 0xBFFF  MTIMER     (MTIMECMP from the bottom, MTIME at 0xBFF8)
 //   0xC000 - 0xCFFF  SSWI       (only if SU_MODE_EN=1)
 //   0xD000 - 0xFFFF  reserved (RAZ/WI)
+//
+// This is ACLINT 1.0-rc4 Section 1.1 / Table 2 verbatim: one SiFive CLINT is
+// equivalent to an MSWI at 0x0000-0x3fff plus an MTIMER at 0x4000-0xbfff. A
+// CLINT-compatible map at 0x0200_0000 therefore drops straight in, including
+// `mtime` at the legacy 0x0200_BFF8.
+//
+// MTIME sits at the TOP of the MTIMER window, not just past the MTIMECMP array,
+// which is what keeps its address independent of NUM_HARTS. Placing it directly
+// above the array would relocate it whenever the hart count changed, silently
+// invalidating every device tree and BSP header built against it.
 //
 //----------------------------------------------------------------------------
 `default_nettype none
 
 module  ahb_aclint #(
-    parameter                   SU_MODE_EN      = 0,    // 1 => instantiate SSWI
+    parameter                   SU_MODE_EN      = 0,    // 1 => instantiate SSWI. Set equal to the core's SU_MODE_EN (same default).
     parameter                   NUM_HARTS       = 1,    // Number of harts (1..16)
-    parameter                   PRIV_CHECK_EN   = 1,    // 1 => enforce M-only privilege checker via hprot_i[1] + hsmode_i; 0 => allow any access (legacy / fabric-policed)
-    parameter                   ASYNC_RST_EN    = 1     // Reset architecture: 1 => asynchronous active-low reset (default), 0 => synchronous reset (clock must run during reset assertion)
+    parameter                   PRIV_CHECK_EN   = 1,    // Enable privilege checker:
+                                                        //      1 => enforce the M-only privilege checker via hprot_i[1] + hsmode_i;
+                                                        //      0 => allow any access (fabric-policed)
+    parameter                   LF_SYNC_EN      = 0,    // Where the MTIME counter lives. clk_lf_i is the timebase source either way.
+                                                        //      0 => clocked by clk_lf_i. Silicon; supports osc-off deep sleep.
+                                                        //      1 => clocked by hclk_aon_i, advanced by an internal tick, so NO flop is
+                                                        //           clocked by clk_lf_i. FPGA; single-clock STA/DFT, no deep sleep.
+    parameter                   ASYNC_RST_EN    = 1     // Reset style: 1=async active-low reset, 0=synchronous reset
 ) (
 
 // AHB CLOCK, RESET & WAKEUP
     input  wire                 hclk_i,                 // AHB clock (gated by hclk_en_o at the SoC-level ICG)
-    input  wire                 hclk_aon_i,             // Always-on AHB-frequency clock (NEVER gated). Same source/frequency as hclk_i
-    input  wire                 hresetn_i,              // Active-low async reset
+    input  wire                 hclk_aon_i,             // Always-on clock: same source and frequency as hclk_i, never gated
+    input  wire                 hresetn_i,              // Active-low reset (asynchronous when ASYNC_RST_EN=1, synchronous otherwise)
     output wire                 hclk_en_o,              // Clock enable output for SoC-level clock gating
-    output wire [NUM_HARTS-1:0] mtimer_wake_lf_o,       // Wake-up signal for the SoC's LF-domain power controller to re-enable the main hclk PLL/oscillator on a programmed mtimecmp expiry.
+    output wire                 mtimer_wake_lf_o,       // Wake-up for the SoC's LF-domain power controller to restart the main oscillator.
 
-// LOW-FREQUENCY CLOCK & RESET (e.g. 32 kHz always-on)
-    input  wire                 clk_lf_i,               // LF clock for MTIME counter
-    input  wire                 resetn_lf_i,            // Active-low async reset (LF domain)
+// LOW-FREQUENCY CLOCK & RESET
+    input  wire                 clk_lf_i,               // Timebase source (e.g. 32 kHz crystal). Each clock phase must be at least 2 hclk_aon_i periods
+    input  wire                 resetn_lf_i,            // Active-low reset (LF domain; asynchronous when ASYNC_RST_EN=1, synchronous otherwise). UNUSED when LF_SYNC_EN=1 -- tie high.
+    input  wire                 hclk_aon_en_i,          // From the SoC oscillator controller. Deasserted synchronously one edge BEFORE the clock stops;
+                                                        // asserted asynchronously on wake, before it restarts.
+    input  wire                 scan_mode_i,            // 1 = scan/test mode.
 
 // AHB-LITE SLAVE INTERFACE
     input  wire                 hsel_i,                 // Slave select
@@ -53,8 +71,8 @@ module  ahb_aclint #(
     input  wire                 hwrite_i,               // Write enable
     input  wire           [2:0] hsize_i,                // Transfer size (only word is meaningful)
     input  wire           [1:0] htrans_i,               // Transfer type (NONSEQ/SEQ start an access)
-    input  wire           [3:0] hprot_i,                // AHB-Lite protection; bit[1]=1 privileged, bit[1]=0 unprivileged. Other bits ignored. Consumed only when PRIV_CHECK_EN=1.
-    input  wire                 hsmode_i,               // aRVern privilege extension: when hprot_i[1]=1, 0=M, 1=S. Don't-care when hprot_i[1]=0. Consumed only when PRIV_CHECK_EN=1.
+    input  wire           [3:0] hprot_i,                // AHB-Lite protection; bit[1]=1 privileged. Other bits ignored.
+    input  wire                 hsmode_i,               // aRVern privilege extension: when hprot_i[1]=1, 0=M and 1=S.
     input  wire                 hready_i,               // Bus ready in
     input  wire          [31:0] hwdata_i,               // Write data
     output wire          [31:0] hrdata_o,               // Read data
@@ -64,12 +82,12 @@ module  ahb_aclint #(
 // PER-HART INTERRUPTS (hclk DOMAIN)
     output wire [NUM_HARTS-1:0] irq_m_software_o,       // MSIP per hart
     output wire [NUM_HARTS-1:0] irq_m_timer_o,          // MTIP per hart
-    output wire [NUM_HARTS-1:0] irq_s_software_o,       // SSIP per hart; 1-hclk_i cycle pulse per SETSSIP write (edge, NOT a level). Consumer MUST sample on hclk_i. Tied 0 when SU_MODE_EN=0.
+    output wire [NUM_HARTS-1:0] irq_s_software_o,       // SSIP per hart: a 1-hclk_i cycle pulse per SETSSIP write (an EDGE, not a level).
 
 // ZICNTR TIME INTERFACE
-    input  wire                 time_req_i,             // 1-hclk_i cycle pulse: request a fresh time_val. MUST be in the hclk_i domain (sampled directly without a synchronizer); the consumer is responsible for edge-syncing if generated elsewhere.
-    output wire                 time_gnt_o,             // 1-hclk_i cycle pulse alongside a valid time_val_o (hclk_i domain).
-    output wire          [63:0] time_val_o              // Latched 64-bit MTIME snapshot (hclk_i domain). Held stable between Zicntr reads from the cycle time_gnt_o pulses.
+    input  wire                 time_req_i,             //  a Zicntr time read is outstanding. Hold it until time_gnt_o pulses
+    output wire                 time_gnt_o,             // 1-hclk_i cycle pulse alongside a valid time_val_o
+    output wire          [63:0] time_val_o              // Latched 64-bit MTIME snapshot (hclk_i domain).
 );
 
 
@@ -79,23 +97,28 @@ module  ahb_aclint #(
 // Fixed base offsets per the ACLINT spec layout (see header).
 
 localparam [15:0] MSWI_BASE_OFFSET    = 16'h0000;
-localparam [15:0] MTIMER_BASE_OFFSET  = 16'h4000;
 localparam [15:0] SSWI_BASE_OFFSET    = 16'hC000;
+// No MTIMER_BASE_OFFSET: its window (0x4000-0xBFFF) is not power-of-2 aligned,
+// so it is decoded by the XOR below rather than by comparing against a base.
 
-localparam        REG_AW              = 14;             // 16-KB per sub-component window
+// Per-sub-block address widths. These are NOT interchangeable: MTIMER owns a
+// 32-KB window and the other two own 16-KB ones, so feeding every block the same
+// slice would hand SSWI (based at 0xC000) an offset of 0x4000 instead of 0x0000
+// and it would decode nothing at all.
+localparam        MSWI_AW             = 14;             // 16-KB window at 0x0000
+localparam        MTIMER_AW           = 15;             // 32-KB window at 0x4000
+localparam        SSWI_AW             = 14;             // 4-KB window at 0xC000, 14 bits is ample
 
 
 //=============================================================================
 // 2)  AHB ADDRESS-PHASE -> DATA-PHASE LATCHING
 //=============================================================================
 
-wire        aph_valid = hsel_i    & hready_i & htrans_i[1];
-wire        aph_write = aph_valid & hwrite_i;
+wire        aph_valid   = hsel_i    & hready_i & htrans_i[1];
+wire        aph_write   = aph_valid & hwrite_i;
 
-wire        dph_capture = aph_valid;
-wire        dph_en      = aph_valid | hready_i;
-wire [19:0] dph_d       = dph_capture ? {1'b1, aph_write, haddr_i, hprot_i[1], hsmode_i}
-                                      : 20'h00000;
+wire        dph_en      = hready_i;
+wire [19:0] dph_d       = aph_valid ? {1'b1, aph_write, haddr_i, hprot_i[1], hsmode_i} : 20'h00000;
 
 wire        dph_valid;
 wire        dph_write;
@@ -125,24 +148,33 @@ arv_ipdff #(.WIDTH(20), .ARST_EN(ASYNC_RST_EN)) u_dph (
 //
 // Denied accesses get an AHB-Lite ERROR response
 
-wire dph_mode_m = dph_hprot1 & ~dph_hsmode;
-wire dph_mode_s = dph_hprot1 &  dph_hsmode;
+wire dph_mode_m              = dph_hprot1 & ~dph_hsmode;
+wire dph_mode_s              = dph_hprot1 &  dph_hsmode;
 
 // Per-sub-window privilege gates. PRIV_CHECK_EN=0 disables both checks
-wire dph_priv_allowed_m_only = (PRIV_CHECK_EN == 1) ?  dph_mode_m              : 1'b1; // MSWI, MTIMER
-wire dph_priv_allowed_m_or_s = (PRIV_CHECK_EN == 1) ? (dph_mode_m | dph_mode_s): 1'b1; // SSWI
+wire dph_priv_allowed_m_only = (PRIV_CHECK_EN == 1) ?  dph_mode_m               : 1'b1; // MSWI, MTIMER
+wire dph_priv_allowed_m_or_s = (PRIV_CHECK_EN == 1) ? (dph_mode_m | dph_mode_s) : 1'b1; // SSWI
 
 
 //=============================================================================
 // 4)  SUB-COMPONENT ADDRESS DECODE
 //=============================================================================
-// 16 KB windows aligned to MSWI/MTIMER/SSWI boundaries.
-// The upper 2 bits of haddr_i pick MSWI (00), MTIMER (01), or upper half (1x).
-// Within the upper half, haddr[13:12] = 2'b00 selects SSWI (0xC000-0xCFFF).
+// MSWI   : haddr[15:14] == 2'b00   (16 KB)
+// MTIMER : haddr[15] ^ haddr[14]   (32 KB, 01 and 10; offset = {haddr[15], haddr[13:0]})
+// SSWI   : haddr[15:12] == 4'hC    (4 KB)
+// 0xD000-0xFFFF decodes to nothing and stays RAZ/WI at any privilege.
 
 // Raw decode (unfiltered) used by the error FSM and lint sinks.
+// MTIMER offset within its window. 0x4000-0xBFFF is 32 KB but NOT 32-KB
+// aligned, so a plain bit-slice does not give a contiguous offset. It happens to
+// need no adder either: within the window bit[15] is exactly offset bit[14]
+// (0x4000 -> 0, 0x8000 -> 1) and bits [13:0] pass through, so the offset is pure
+// wiring.
+wire [MTIMER_AW-1:0] mtimer_addr = {dph_addr[15], dph_addr[13:0]};
+
 wire in_mswi_raw   = dph_valid & (dph_addr[15:14] == MSWI_BASE_OFFSET   [15:14]);
-wire in_mtimer_raw = dph_valid & (dph_addr[15:14] == MTIMER_BASE_OFFSET [15:14]);
+// 0x4000-0xBFFF is [15:14] in {01,10}, i.e. the two bits differ -- one XOR.
+wire in_mtimer_raw = dph_valid & (dph_addr[15] ^ dph_addr[14]);
 wire in_sswi_raw   = dph_valid & (dph_addr[15:12] == SSWI_BASE_OFFSET   [15:12]);
 
 // Privilege-gated decode wires that feed reg_sel_i on each sub-block.
@@ -160,13 +192,14 @@ wire [31:0]  mswi_rdata;
 
 aclint_mswi #(
     .NUM_HARTS         ( NUM_HARTS                ),
-    .REG_AW            ( REG_AW                   ),
+    .REG_AW            ( MSWI_AW                  ),
     .ARST_EN           ( ASYNC_RST_EN             )
 ) u_mswi (
     .hclk_i            ( hclk_i                   ),
     .hresetn_i         ( hresetn_i                ),
     .reg_sel_i         ( in_mswi                  ),
-    .reg_addr_i        ( dph_addr[REG_AW-1:0]     ),
+    .reg_addr_i        ( dph_addr[MSWI_AW-1:0]    ),
+
     .reg_wr_en_i       ( dph_write                ),
     .reg_wr_data_i     ( hwdata_i                 ),
     .reg_rd_data_o     ( mswi_rdata               ),
@@ -185,7 +218,8 @@ wire         mtimer_active;
 
 aclint_mtimer #(
     .NUM_HARTS         ( NUM_HARTS                ),
-    .REG_AW            ( REG_AW                   ),
+    .REG_AW            ( MTIMER_AW                ),
+    .LF_SYNC_EN        ( LF_SYNC_EN               ),
     .ARST_EN           ( ASYNC_RST_EN             )
 ) u_mtimer (
     .hclk_i            ( hclk_i                   ),
@@ -193,8 +227,11 @@ aclint_mtimer #(
     .hresetn_i         ( hresetn_i                ),
     .clk_lf_i          ( clk_lf_i                 ),
     .resetn_lf_i       ( resetn_lf_i              ),
+    .hclk_aon_en_i     ( hclk_aon_en_i            ),
+    .scan_mode_i       ( scan_mode_i              ),
     .reg_sel_i         ( in_mtimer                ),
-    .reg_addr_i        ( dph_addr[REG_AW-1:0]     ),
+    .reg_addr_i        ( mtimer_addr              ),
+
     .reg_wr_en_i       ( dph_write                ),
     .reg_wr_data_i     ( hwdata_i                 ),
     .reg_rd_data_o     ( mtimer_rdata             ),
@@ -221,20 +258,20 @@ generate
     if (SU_MODE_EN == 1) begin : G_SSWI
 
         aclint_sswi #(
-            .NUM_HARTS         ( NUM_HARTS            ),
-            .REG_AW            ( REG_AW               ),
-            .ARST_EN           ( ASYNC_RST_EN         )
+            .NUM_HARTS         ( NUM_HARTS             ),
+            .REG_AW            ( SSWI_AW               ),
+            .ARST_EN           ( ASYNC_RST_EN          )
         ) u_sswi (
-            .hclk_i            ( hclk_i               ),
-            .hresetn_i         ( hresetn_i            ),
-            .reg_sel_i         ( in_sswi              ),
-            .reg_addr_i        ( dph_addr[REG_AW-1:0] ),
-            .reg_wr_en_i       ( dph_write            ),
-            .reg_wr_data_i     ( hwdata_i             ),
-            .reg_rd_data_o     ( sswi_rdata           ),
-            .reg_ready_o       ( sswi_ready           ),
-            .irq_s_software_o  ( irq_s_software_int   ),
-            .sswi_active_o     ( sswi_active          )
+            .hclk_i            ( hclk_i                ),
+            .hresetn_i         ( hresetn_i             ),
+            .reg_sel_i         ( in_sswi               ),
+            .reg_addr_i        ( dph_addr[SSWI_AW-1:0] ),
+            .reg_wr_en_i       ( dph_write             ),
+            .reg_wr_data_i     ( hwdata_i              ),
+            .reg_rd_data_o     ( sswi_rdata            ),
+            .reg_ready_o       ( sswi_ready            ),
+            .irq_s_software_o  ( irq_s_software_int    ),
+            .sswi_active_o     ( sswi_active           )
         );
 
     end else begin : G_NO_SSWI
@@ -255,9 +292,9 @@ assign irq_s_software_o = irq_s_software_int;
 //=============================================================================
 // Each sub-component returns zero on its data bus unless it is being read.
 
-assign hrdata_o = mswi_rdata   |
-                  mtimer_rdata |
-                  sswi_rdata   ;
+assign hrdata_o  = mswi_rdata   |
+                   mtimer_rdata |
+                   sswi_rdata   ;
 
 
 //=============================================================================
@@ -265,7 +302,7 @@ assign hrdata_o = mswi_rdata   |
 //=============================================================================
 // A sub-component is allowed to stall the bus by lowering its reg_ready_o.
 
-wire sub_ready = mswi_ready & mtimer_ready & sswi_ready;
+wire   sub_ready = mswi_ready & mtimer_ready & sswi_ready;
 
 
 //=============================================================================
@@ -282,11 +319,11 @@ generate
         wire err_state;
         wire deny_mswi      = in_mswi_raw    & ~dph_priv_allowed_m_only;
         wire deny_mtimer    = in_mtimer_raw  & ~dph_priv_allowed_m_only;
-        wire deny_sswi      = in_sswi_raw    & ~dph_priv_allowed_m_or_s;
+        wire deny_sswi      = in_sswi_raw    & ~dph_priv_allowed_m_or_s & (SU_MODE_EN == 1);
         wire access_denied  = dph_valid      & (deny_mswi | deny_mtimer | deny_sswi);
 
         // 2-state error FSM: IDLE -> P2 on a denied access, P2 -> IDLE always.
-        // Next-state = (in IDLE) & access_denied; identical to the original case.
+        // Next-state = (in IDLE) & access_denied.
         wire err_state_nxt  = (err_state == ERR_IDLE) & access_denied;
 
         arv_ipdff #(.WIDTH(1), .RST_VAL(ERR_IDLE), .ARST_EN(ASYNC_RST_EN)) u_err_state (
@@ -294,15 +331,15 @@ generate
                                                                                         .d_i (err_state_nxt),
                                                                                         .q_o (err_state));
 
-        wire in_err_p1     = access_denied & (err_state == ERR_IDLE);  // first error cycle
-        wire in_err_p2     =                 (err_state == ERR_P2  );  // second error cycle
+        wire in_err_p1      = access_denied & (err_state == ERR_IDLE);  // first error cycle
+        wire in_err_p2      =                 (err_state == ERR_P2  );  // second error cycle
 
-        assign hresp_o     = in_err_p1 | in_err_p2;
-        assign hreadyout_o = in_err_p1 ? 1'b0 : sub_ready;             // stall in P1, normal ready otherwise
+        assign hresp_o      = in_err_p1 | in_err_p2;
+        assign hreadyout_o  = in_err_p1 ? 1'b0 : sub_ready;             // stall in P1, normal ready otherwise
 
     end else begin : G_AHB_NO_ERR
-        assign hresp_o     = 1'b0;
-        assign hreadyout_o = sub_ready;
+        assign hresp_o      = 1'b0;
+        assign hreadyout_o  = sub_ready;
     end
 endgenerate
 
@@ -325,8 +362,14 @@ generate
     if ((SU_MODE_EN != 0) && (SU_MODE_EN != 1)) begin : CHECK_SU_MODE_EN
         initial $fatal(1, "ahb_aclint: SU_MODE_EN (%0d) must be 0 or 1.", SU_MODE_EN);
     end
-     if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
+    if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "ahb_aclint: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
+    end
+    if ((PRIV_CHECK_EN != 0) && (PRIV_CHECK_EN != 1)) begin : CHECK_PRIV_CHECK_EN
+        initial $fatal(1, "ahb_aclint: PRIV_CHECK_EN (%0d) must be 0 or 1.", PRIV_CHECK_EN);
+    end
+    if ((LF_SYNC_EN != 0) && (LF_SYNC_EN != 1)) begin : CHECK_LF_SYNC_EN
+        initial $fatal(1, "ahb_aclint: LF_SYNC_EN (%0d) must be 0 or 1.", LF_SYNC_EN);
     end
 endgenerate
 // pragma translate_on

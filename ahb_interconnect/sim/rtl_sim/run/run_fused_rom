@@ -1,4 +1,10 @@
 #!/bin/bash
+
+# Optional pass selector so run_all can log each arbitration mode separately
+# (parse_results scores a log by a single "PASSED" line, so the two passes
+# must not share one log). No argument runs both, as before.
+PASS_SEL="${1:-both}"
+
 #----------------------------------------------------------------------------
 #          _    _           Family:    aRVern System IPs
 #         / \__/ \          Module:    run_fused_rom
@@ -40,6 +46,7 @@ NODUMP_FLAG=""
 FLATTEN_PY="$(dirname "$(realpath "$0")")/../bin/flatten_filelist.py"
 "$FLATTEN_PY" "$SUBMITFILE" ./submit_sim.f >/dev/null
 SUBMITFILE=./submit_sim.f
+if [ "$PASS_SEL" = "both" ] || [ "$PASS_SEL" = "rr" ]; then
 
 # ----------------------------------------------------------------------------
 # Pass 1: Round-robin (default arbitration)
@@ -50,6 +57,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 ./simv
+fi
+if [ "$PASS_SEL" = "both" ] || [ "$PASS_SEL" = "fixb" ]; then
 
 # ----------------------------------------------------------------------------
 # Pass 2: FIXED_B_PRIO=1 (fixed Port-B priority)
@@ -65,3 +74,4 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 ./simv_fixb
+fi

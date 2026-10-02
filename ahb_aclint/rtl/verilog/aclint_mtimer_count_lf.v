@@ -10,87 +10,149 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : aclint_mtimer_count_lf.v
-// Module Description : Low-frequency MTIME counter and per-hart MTIMECMP
-//                      comparators. Runs entirely in the clk_lf_i domain so
-//                      the timer keeps ticking (and can wake a WFI-halted
-//                      hart) even when hclk_i is gated.
+// Module Description : MTIME counter and per-hart MTIMECMP comparators. This
+//                      is the LF-resident island: it runs entirely in the
+//                      clk_lf_i domain so the timer keeps counting -- and can
+//                      still assert the wake that restarts a stopped main
+//                      oscillator -- when hclk_i AND hclk_aon_i are both gone.
+//                      Nothing here may depend on an hclk-derived enable.
+//
+// WHY THE COUNTER IS PLAIN BINARY
+//   The hclk_aon_i side captures it into a mirror on lf_tick, a bounded time
+//   AFTER the clk_lf_i edge, when every bit has settled. A value that is only
+//   ever sampled stable needs no Gray encoding, and Gray would actively hurt on
+//   writes, where an arbitrary jump flips many bits at once.
+//
+// LOAD ONE-SHOT -- SAFETY, NOT OPTIMISATION
+//   load_req_i is a level driven by the hclk_aon_i side and cleared by it one LF
+//   period later. If hclk_aon_i stops while it is asserted -- exactly what deep
+//   sleep does -- a level-sensitive load would re-apply the same value on every
+//   clk_lf_i edge and freeze MTIME at the written value for the whole sleep. The
+//   edge detect below makes that impossible: after the first load, load_req_d is
+//   high and no further load occurs however long the request stays asserted.
+//
+//   The paired guarantee -- that the request is eventually RETIRED -- comes from
+//   the hclk side holding its clock enable. That is liveness; correctness here
+//   must not depend on it, and does not.
 //----------------------------------------------------------------------------
 `default_nettype none
 
 module  aclint_mtimer_count_lf #(
-    parameter                      NUM_HARTS = 1,       // Number of harts (1..16)
-    parameter                      ARST_EN   = 1'b1     // Reset style: 1=asynchronous, 0=synchronous
+    parameter                      NUM_HARTS  = 1,      // Number of harts (1..16)
+    parameter                      LF_SYNC_EN = 1'b0,   // 1 => no clk_lf_i domain; the wake comparators are elided and wake_lf_o is held asserted
+    parameter                      ARST_EN    = 1'b1    // Reset style: 1=asynchronous, 0=synchronous
 ) (
 
 // LOW-FREQUENCY CLOCK & RESET
-    input  wire                    clk_lf_i,            // Low-frequency clock (e.g. 32 kHz)
-    input  wire                    resetn_lf_i,         // Active-low async reset (sync-deassert)
+    input  wire                    clk_lf_i,            // LF clock, or hclk_aon_i under LF_SYNC_EN
+    input  wire                    resetn_lf_i,         // Active-low reset (asynchronous when ARST_EN=1, synchronous otherwise)
+    input  wire                    lf_en_i,             // Tick enable: 1'b1 in async mode, the LF pulse in sync mode
 
 // MTIMECMP VALUES
-    input  wire [64*NUM_HARTS-1:0] mtimecmp_lf_i,       // Per-hart MTIMECMP (flattened)
+    input  wire [64*NUM_HARTS-1:0] mtimecmp_i,          // Per-hart MTIMECMP (flattened)
+
+// MTIME LOAD PORT
+    input  wire                    load_req_i,          // Load request level
+    input  wire             [63:0] load_val_i,          // 64-bit value to load
+    input  wire              [1:0] load_we_i,           // Halves this load writes: [0]=LO, [1]=HI
 
 // COUNTER OUTPUTS
-    output wire             [63:0] mtime_gray_lf_o,     // Gray-encoded MTIME (registered, glitch-free for CDC)
-    output wire    [NUM_HARTS-1:0] irq_m_timer_lf_o     // Per-hart comparator output (registered, glitch-free)
+    output wire             [63:0] mtime_lf_o,          // Binary MTIME (LF domain)
+    output wire                    load_ack_lf_o,       // Load pending: high from the launch tick until the clk_lf_i edge that consumes it, so it falls ON the load, not after it. Bench probe only; no RTL consumer.
+    output wire    [NUM_HARTS-1:0] wake_lf_o            // Wake-up for the SoC's LF-domain power controller to restart the main oscillator. Constant 1 under LF_SYNC_EN.
 );
 
 
 //=============================================================================
-// 1)  GRAY MTIME REGISTER + DERIVED BINARY VIEWS
+// 1)  LOAD REQUEST EDGE DETECT (ONE-SHOT)
 //=============================================================================
-// The counter advances by 1 binary count per clk_lf_i cycle.
 
-wire [63:0] mtime_gray_lf;
-wire [63:0] mtime_bin_now;
+wire load_req_d;
 
-aclint_gray2bin #(.W(64)) u_gray2bin (
-    .gray_i   ( mtime_gray_lf ),
-    .binary_o ( mtime_bin_now )
-);
+arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_load_req_d (
+              .clk_i(clk_lf_i), .rst_n_i(resetn_lf_i), .en_i(lf_en_i),
+                                                       .d_i (load_req_i), .q_o(load_req_d));
 
-// Next-cycle binary view (= mtime + 1)
-wire [63:0] mtime_bin_next  = mtime_bin_now + 64'h1;
-wire [63:0] mtime_gray_next = mtime_bin_next ^ (mtime_bin_next >> 1);
+wire   mtime_load    = load_req_i & ~load_req_d;
+
+assign load_ack_lf_o = mtime_load &  lf_en_i;
 
 
 //=============================================================================
-// 2)  GRAY COUNTER STATE UPDATE
+// 2)  MTIME COUNTER
 //=============================================================================
-
-arv_ipdff #(.WIDTH(64), .ARST_EN(ARST_EN)) u_mtime_gray_lf (
-                   .clk_i(clk_lf_i), .rst_n_i(resetn_lf_i), .en_i(1'b1),
-                                                            .d_i (mtime_gray_next),
-                                                            .q_o (mtime_gray_lf));
-
-assign mtime_gray_lf_o = mtime_gray_lf;
-
-
-//=============================================================================
-// 3)  PER-HART COMPARATORS (REGISTERED, +1 OFFSET)
-//=============================================================================
-// "mtime >= mtimecmp[h]" raises the per-hart interrupt level.
+// A write REPLACES the count for that edge instead of incrementing (ACLINT 1.0
+// Section 2.2): the tick the load lands on is consumed by the load, so software
+// reads back exactly what it wrote rather than value+1.
 //
-// The comparator uses mtime_bin_next (= mtime + 1) instead of mtime_bin_now
-// to compensate for the 1-cycle clk_lf_i flop delay of irq_m_timer_lf_r.
-// Without the +1 offset, the IRQ would assert one LF cycle AFTER the cycle
-// in which the unregistered comparator first evaluates true; with the
-// offset, irq_m_timer_lf_r asserts on the same LF edge that mtime first
-// equals/exceeds mtimecmp -- matching the spec's "MTIP pending whenever
-// MTIME >= MTIMECMP" semantics (RISC-V ACLINT 1.0-rc4, Section 2.3).
+// Halves written together arrive together -- they share one shadow and one
+// request -- so a 64-bit MTIME write is ATOMIC at the counter.
+//
+// A half that software did NOT write must HOLD, not increment. Holding keeps
+// LO's carry out of a just-loaded HI, and stops a half-write from silently
+// advancing the other half by one.
 
-wire [NUM_HARTS-1:0] irq_m_timer_lf_r;
+wire [63:0] mtime_lf;
+wire [63:0] mtime_inc = mtime_lf + 64'h1;
+wire [63:0] mtime_next;
+
+assign mtime_next[31:0]  = mtime_load ? (load_we_i[0] ? load_val_i[31:0]  : mtime_lf[31:0] ) : mtime_inc[31:0] ;
+assign mtime_next[63:32] = mtime_load ? (load_we_i[1] ? load_val_i[63:32] : mtime_lf[63:32]) : mtime_inc[63:32];
+
+arv_ipdff #(.WIDTH(64), .ARST_EN(ARST_EN)) u_mtime_lf (
+              .clk_i(clk_lf_i), .rst_n_i(resetn_lf_i), .en_i(lf_en_i),
+                                                       .d_i (mtime_next), .q_o(mtime_lf));
+
+assign mtime_lf_o = mtime_lf;
+
+
+//=============================================================================
+// 3)  PER-HART WAKE COMPARATORS
+//=============================================================================
+// Built ONLY under LF_SYNC_EN=0, where they are this block's reason for
+// existing: a comparator clocked by clk_lf_i is what can assert a wake with
+// hclk_aon_i stopped, and so is what restarts the oscillator. Under LF_SYNC_EN
+// the whole bank would run on hclk_aon_i, could not outlive a stopped clock, and
+// would only duplicate irq_m_timer_o -- so it is parameterized away rather than
+// left as NUM_HARTS 64-bit comparators of dead area. The wake is then held
+// ASSERTED, not silent: MTIME itself runs on hclk_aon_i in that mode, so the
+// clock must never stop, and a permanent wake request makes that impossible for
+// a controller that honours it rather than a rule the integrator has to read.
+//
+// The compare is against mtime_next, the value the counter is about to take,
+// which cancels the flop's LF cycle of latency: wake_lf_o rises on the same LF
+// edge that mtime first reaches mtimecmp (ACLINT 1.0-rc4 Section 2.3). On a load
+// edge mtime_next IS the loaded value, so the comparison is against what the
+// counter actually takes.
+//
+// Registered, not combinational: a 64-bit compare glitches while it settles, and
+// the consumer is an always-on power controller that needs a clean level.
 
 genvar h;
 generate
-    for (h = 0; h < NUM_HARTS; h = h + 1) begin : G_CMP
-        arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_irq_m_timer_lf (
-                           .clk_i(clk_lf_i), .rst_n_i(resetn_lf_i), .en_i(1'b1),
-                                                                    .d_i ((mtime_bin_next >= mtimecmp_lf_i[64*h +: 64])),
-                                                                    .q_o (irq_m_timer_lf_r[h]));
-    end
-endgenerate
+if (LF_SYNC_EN == 0) begin : G_WAKE
 
-assign irq_m_timer_lf_o = irq_m_timer_lf_r;
+    wire [NUM_HARTS-1:0] wake_lf_r;
+
+    for (h = 0; h < NUM_HARTS; h = h + 1) begin : G_CMP
+        arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_wake_lf (
+                           .clk_i(clk_lf_i), .rst_n_i(resetn_lf_i), .en_i(lf_en_i),
+                                                                    .d_i ((mtime_next >= mtimecmp_i[64*h +: 64])),
+                                                                    .q_o (wake_lf_r[h]));
+    end
+
+    assign wake_lf_o = wake_lf_r;
+
+end else begin : G_NO_WAKE
+
+    assign wake_lf_o = {NUM_HARTS{1'b1}};
+
+    // mtimecmp_i has no other consumer here; sink it per the *_unused convention.
+    wire [64*NUM_HARTS-1:0] mtimecmp_unused;
+    assign mtimecmp_unused = mtimecmp_i;
+
+end
+endgenerate
 
 
 //=============================================================================

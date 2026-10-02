@@ -49,7 +49,7 @@ parameter integer            NR_SUP_RW    = 4;       // Number of Supervisor-Mod
 parameter integer            NR_SUP_RO    = 2;       // Number of Supervisor-Mode Read-Only  registers (min: 0; max:  64)
 
 parameter integer            NR_MAC_RW    = 2;       // Number of Machine-Mode Read-Write registers    (min: 0; max: 128)
-parameter integer            NR_MAC_RO    = 1;       // Number of Machine-Mode Read-Only  registers    (min: 0; max:  64)
+parameter integer            NR_MAC_RO    = 1;       // Number of Machine-Mode Read-Only  registers    (min: 0; max:  60)
 
 parameter                    ASYNC_RST_EN = 1'b1;    // Reset architecture: 1=async active-low reset, 0=synchronous reset
 
@@ -109,9 +109,9 @@ output wire           [31:0] ccsr_rdata_o;
 //////                          + ccsr_bank_i[6]      -> 0x9C0-0x9FF Custom Read-Write, Supervisor-Mode                     //////
 //////                          + ccsr_bank_i[7]      -> 0xDC0-0xDFF Custom Read-Only,  Supervisor-Mode                     //////
 //////                                                                                                                      //////
-//////                          + ccsr_bank_i[8]      -> 0x7C0-0x7FF Custom Read-Write, Machine-Mode                        //////
+//////                          + ccsr_bank_i[8]      -> 0x7C0-0x7FF Custom Read-Write, Machine-Mode (0x7FD-0x7FF: core)    //////
 //////                          + ccsr_bank_i[9]      -> 0xBC0-0xBFF Custom Read-Write, Machine-Mode                        //////
-//////                          + ccsr_bank_i[10]     -> 0xFC0-0xFFF Custom Read-Only,  Machine-Mode                        //////
+//////                          + ccsr_bank_i[10]     -> 0xFC0-0xFFF Custom Read-Only,  Machine-Mode (0xFFC-0xFFF: core)    //////
 //////                                                                                                                      //////
 //////======================================================================================================================//////
 
@@ -334,7 +334,7 @@ assign       ccsr_rdata_o =  ccsr_rdata_usr_rdwr   |
 // [NR_*-1:0] bits. The upper bits are intentionally unused. We tie them to
 // `*_unused` sink wires so that *any* lint tool can waive them with a single
 // rule on the `_unused` postfix (no tool-specific pragmas required). See
-// doc/arv_custom_csr.md for the waiver-file recipe.
+// doc/arv_custom_csr.md for the waiver rule.
 
 // Unused User signals
 wire  [64-NR_USR_RO:0] ccsr_reg_en_usr_rdonly_unused;
@@ -357,10 +357,26 @@ wire [128-NR_MAC_RW:0] ccsr_reg_en_mac_rdwr_unused;
 assign  ccsr_reg_en_mac_rdonly_unused = ccsr_reg_en_mac_rdonly[64:NR_MAC_RO];
 assign  ccsr_reg_en_mac_rdwr_unused   = ccsr_reg_en_mac_rdwr[128:NR_MAC_RW];
 
+// Without any RW group, the clock, reset and write inputs have no load.
+generate
+    if ((NR_USR_RW==0) && (NR_SUP_RW==0) && (NR_MAC_RW==0)) begin : WITHOUT_ANY_RW
+        wire        hclk_unused;
+        wire        hresetn_unused;
+        wire [31:0] ccsr_wdata_unused;
+        wire        ccsr_wen_unused;
+        assign hclk_unused       = hclk_i;
+        assign hresetn_unused    = hresetn_i;
+        assign ccsr_wdata_unused = ccsr_wdata_i;
+        assign ccsr_wen_unused   = ccsr_wen_i;
+    end
+endgenerate
+
 // Check parameter values: abort elaboration if any NR_*_* is out of range.
 // Lower bound 0 is legal (sub-instance is generate-guarded); upper bounds
 // follow the bank decoder layout: 4 banks*64 for User-RW, 2*64 for Sup/Mac-RW,
-// 1*64 for any RO.
+// 1*64 for User/Sup-RO. Mac-RO stops at 60: the aRVern core owns 0xFFC-0xFFF
+// and never selects them. Mac-RW registers 61-63 (0x7FD-0x7FF) are likewise
+// never selected by the core; registers 64 and up (0xBC0 bank) are.
 // pragma translate_off
 generate
     if ((NR_USR_RW < 0) || (NR_USR_RW > 256)) begin : CHECK_NR_USR_RW
@@ -378,8 +394,8 @@ generate
     if ((NR_MAC_RW < 0) || (NR_MAC_RW > 128)) begin : CHECK_NR_MAC_RW
         initial $fatal(1, "arv_custom_csr: NR_MAC_RW (%0d) must be 0..128.", NR_MAC_RW);
     end
-    if ((NR_MAC_RO < 0) || (NR_MAC_RO >  64)) begin : CHECK_NR_MAC_RO
-        initial $fatal(1, "arv_custom_csr: NR_MAC_RO (%0d) must be 0..64.",  NR_MAC_RO);
+    if ((NR_MAC_RO < 0) || (NR_MAC_RO >  60)) begin : CHECK_NR_MAC_RO
+        initial $fatal(1, "arv_custom_csr: NR_MAC_RO (%0d) must be 0..60.",  NR_MAC_RO);
     end
      if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "arv_custom_csr: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);

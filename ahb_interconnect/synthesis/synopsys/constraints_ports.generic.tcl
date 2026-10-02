@@ -99,6 +99,7 @@ set_output_delay 0                            -min -clock "hclk"   [get_ports s_
 set M_HADDR_DLY        [expr ($CLOCK_PERIOD/100) * 20]
 set M_HAUSER_DLY       [expr ($CLOCK_PERIOD/100) * 20]
 set M_HBURST_DLY       [expr ($CLOCK_PERIOD/100) * 20]
+set M_HMASTER_DLY      [expr ($CLOCK_PERIOD/100) * 20]
 set M_HMASTLOCK_DLY    [expr ($CLOCK_PERIOD/100) * 20]
 set M_HPROT_DLY        [expr ($CLOCK_PERIOD/100) * 20]
 set M_HSIZE_DLY        [expr ($CLOCK_PERIOD/100) * 20]
@@ -120,6 +121,8 @@ set_input_delay 0                            -min -clock "hclk"   [get_ports m_h
 
 set_input_delay $M_HBURST_DLY                -max -clock "hclk"   [get_ports m_hburst_i]
 set_input_delay 0                            -min -clock "hclk"   [get_ports m_hburst_i]
+set_input_delay $M_HMASTER_DLY               -max -clock "hclk"   [get_ports m_hmaster_i]
+set_input_delay 0                            -min -clock "hclk"   [get_ports m_hmaster_i]
 
 set_input_delay $M_HMASTLOCK_DLY             -max -clock "hclk"   [get_ports m_hmastlock_i]
 set_input_delay 0                            -min -clock "hclk"   [get_ports m_hmastlock_i]

@@ -1,0 +1,98 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# runcov -- Verilator line/branch/toggle coverage sweep over the ahb_rom_controller suite.
+#
+# Invoked by `run_all -cov`. Builds and runs every simulation run_all performs (the
+# job list comes from bin/cov_jobs.py, which parses run_all) under Verilator, merges
+# the per-run databases and reports per-file coverage of the ROM controller RTL and the
+# arv_primitives it uses.
+#   runcov                   the whole run_all list
+#   runcov <tag> ...         just those jobs (tags as cov_jobs.py prints them),
+#                            into run/cov/single/<first tag>/
+#----------------------------------------------------------------------------
+set -u
+
+RUN_DIR="$(cd "$(dirname "$0")/../run" && pwd)"
+BIN="$(cd "$(dirname "$0")" && pwd)"
+IP="$(cd "$BIN/../../.." && pwd)"
+IPS="$(cd "$IP/.." && pwd)"
+BENCH="$IP/bench/verilog"
+RTL="$IP/rtl/verilog"
+SRC="$IP/sim/rtl_sim/src"
+
+if [ "${1:-}" = "--one" ]; then
+    IFS='|' read -r tag top sub stim defs <<< "$2"; COV="$3"
+    W="$COV/w_$tag"; rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
+    [ "$stim" != "-" ] && ln -sf "$SRC/$stim.v" stimulus.v
+    python3 "$BIN/flatten_filelist.py" "$BENCH/$sub" sub_flat.f >/dev/null
+    grep -vE '^\s*//|^\s*$|^\+' sub_flat.f > files.txt
+    # One fixed seed per job (from its tag): reproducible, but the random tests do not
+    # all draw the same sequence.
+    SEED=$(( $(printf '%s' "$tag" | cksum | cut -d' ' -f1) % 2147483647 ))
+    SCOPE=""
+    if [ "${COV_SCOPE:-dut}" = "dut" ]; then
+        { echo "+incdir+$BENCH"; echo "+incdir+$W"; cat files.txt; } > scope_list.f
+        python3 "$BIN/cov_scope.py" cov_scope.vlt scope_list.f "$RTL" "$IPS/arv_primitives/rtl/verilog"
+        SCOPE="cov_scope.vlt"
+    fi
+    # --x-initial unique + +verilator+rand+reset+1 start every flop at 1, so a reset
+    # net that only ever rises still gives the asynchronous resets a falling edge.
+    # Corrected toggle macro for vectors wider than 64 bits (see cov_vlfix.py).
+    python3 "$BIN/cov_vlfix.py" "obj_$tag"
+    if ! verilator --binary --timing --coverage-line --coverage-toggle --coverage-max-width 65536 --x-initial unique \
+            -Wno-fatal -Wno-TIMESCALEMOD -Wno-LATCH -Wno-WIDTHEXPAND --quiet-exit \
+            -MAKEFLAGS OPT_FAST=-O0 -MAKEFLAGS OPT_SLOW=-O0 -MAKEFLAGS OPT_GLOBAL=-O0 \
+            +define+SEED=$SEED +define+NODUMP +define+ARV_COV_RESET_ZERO $defs \
+            +incdir+"$W" +incdir+"$BENCH" +incdir+"$RTL" \
+            $SCOPE "$BIN/cov_public.vlt" -f files.txt \
+            --top-module "$top" --Mdir "obj_$tag" -o "sim_$tag" > build.log 2>&1; then
+        { echo "=== $tag"; cat build.log; } >> "$COV/build.log"
+        printf '  %-60s BUILD-FAIL\n' "$tag"; exit 0
+    fi
+    rm -f coverage.dat
+    if timeout "${COV_TIMEOUT:-900}" "./obj_$tag/sim_$tag" +verilator+rand+reset+${COV_RAND_RESET:-1} > sim.log 2>&1 \
+       && grep -qE "PASSED|SKIPPED" sim.log && ! grep -q "FAILED" sim.log; then
+        printf '  %-60s PASS\n' "$tag"
+    else
+        { echo "=== $tag"; grep -E "ERROR|FATAL|FAIL|TIMEOUT" sim.log | head -20; tail -5 sim.log; } >> "$COV/fail.log"
+        printf '  %-60s FAIL/TIMEOUT\n' "$tag"
+    fi
+    [ -f coverage.dat ] && mv coverage.dat "$COV/dats/cov_$tag.dat"
+    cd "$COV" && rm -rf "$W"
+    exit 0
+fi
+
+if [ "$#" -gt 0 ]; then
+    SINGLE=1; COV="$RUN_DIR/cov/single/$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')"
+else
+    SINGLE=0; COV="$RUN_DIR/cov"
+fi
+command -v verilator >/dev/null 2>&1 || { echo "ERROR: verilator not found (>= 5.0 needed)."; exit 1; }
+if [ -e "$COV/.lock" ] && kill -0 "$(cat "$COV/.lock" 2>/dev/null)" 2>/dev/null; then
+    echo "ERROR: a coverage sweep is already running (pid $(cat "$COV/.lock"))."; exit 1
+fi
+if [ $SINGLE -eq 0 ] && [ "${COV_ARCHIVE:-1}" != "0" ] && [ -d "$COV/dats" ]; then
+    ADEST="$RUN_DIR/cov_archive/$(date +%Y%m%d-%H%M%S)${COV_ARCHIVE_NAME:+_$COV_ARCHIVE_NAME}"
+    mkdir -p "$ADEST"; cp -R "$COV/dats" "$ADEST/" 2>/dev/null; cp "$COV/coverage.html" "$ADEST/" 2>/dev/null
+    echo "  previous coverage archived -> ${ADEST#$RUN_DIR/}"
+fi
+if [ $SINGLE -eq 1 ]; then rm -rf "$COV"; else
+    rm -rf "$COV/dats" "$COV/coverage.html" "$COV/build.log" "$COV/fail.log" "$COV/results.txt" "$COV"/w_*; fi
+mkdir -p "$COV/dats"; echo $$ > "$COV/.lock"; trap 'rm -f "$COV/.lock"' EXIT
+cd "$COV" || exit 1
+
+if [ "$#" -gt 0 ]; then
+    python3 "$BIN/cov_jobs.py" | awk -F'|' -v want=" $* " 'index(want, " " $1 " ")' > jobs.txt
+else
+    python3 "$BIN/cov_jobs.py" > jobs.txt
+fi
+JOBS="${COV_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+echo "  $(wc -l < jobs.txt | tr -d ' ') runs, $JOBS in parallel"
+tr '\n' '\0' < jobs.txt | xargs -0 -P "$JOBS" -I{} "$BIN/runcov" --one {} "$COV" | tee results.txt
+pass=$(grep -c ' PASS$' results.txt); fail=$(grep -c 'FAIL/TIMEOUT$' results.txt); nobuild=$(grep -c 'BUILD-FAIL$' results.txt)
+echo; echo "  ran: $pass passed, $fail failed, $nobuild build-fail"; echo
+python3 "$BIN/cov_report.py" "$COV/dats"; rc=$?
+python3 "$BIN/cov_html.py" "$COV/dats" -o "$COV/coverage.html"
+echo "  report: $COV/coverage.html"
+[ "$fail" -ne 0 ] || [ "$nobuild" -ne 0 ] && rc=1
+exit $rc

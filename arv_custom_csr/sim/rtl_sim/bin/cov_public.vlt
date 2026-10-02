@@ -1,0 +1,4 @@
+`verilator_config
+// Bench/test variables shared between processes: without this Verilator may hand a
+// monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_arv_custom_csr" -var "*"

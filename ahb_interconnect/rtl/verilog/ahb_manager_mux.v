@@ -59,7 +59,6 @@ module  ahb_manager_mux #(
     output wire               [3:0] hmaster_o,
     output wire                     hmastlock_o,
     output wire               [3:0] hprot_o,
-    output wire                     hready_o,
     output wire                     hsel_o,
     output wire               [2:0] hsize_o,
     output wire               [1:0] htrans_o,
@@ -79,7 +78,6 @@ wire          [3*NR_M-1:0] hburst_int;
 wire          [4*NR_M-1:0] hmaster_int;
 wire            [NR_M-1:0] hmastlock_int;
 wire          [4*NR_M-1:0] hprot_int;
-wire            [NR_M-1:0] hready_int;
 wire            [NR_M-1:0] hsel_int;
 wire          [3*NR_M-1:0] hsize_int;
 wire   [HAUSER_W*NR_M-1:0] hauser_int;
@@ -223,7 +221,6 @@ generate
             .hmaster_o         ( hmaster_int[4*ii+:4]              ),
             .hmastlock_o       ( hmastlock_int[ii]                 ),
             .hprot_o           ( hprot_int[4*ii+:4]                ),
-            .hready_o          ( hready_int[ii]                    ),
             .hsel_o            ( hsel_int[ii]                      ),
             .hsize_o           ( hsize_int[3*ii+:3]                ),
             .hauser_o          ( hauser_int[HAUSER_W*ii+:HAUSER_W] ),
@@ -260,7 +257,6 @@ assign hwrite_o    =  grant_mux_1b    ( m_grant_i, hwrite_int  );
 // Data-phase signals: manager_if gates with m_dph_ongoing so only one drives non-zero
 assign hwdata_o    =  mux_to_32b      ( hwdata_int  );
 // Structural signals: unchanged
-assign hready_o    = &hready_int;
 assign hsel_o      = |hsel_int;
 
 // Combine clock enable of each manager interface

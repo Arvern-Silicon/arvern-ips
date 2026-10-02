@@ -19,6 +19,7 @@ seed=""
 design="GENERIC"
 wait_state="ZERO_WS"
 priority_mode=""
+arb_arg=""
 while [[ $# -gt 0 ]]; do
     key="$1"
     shift
@@ -39,6 +40,11 @@ while [[ $# -gt 0 ]]; do
         -fixed_b_prio)
             priority_mode="FUSED_FIXED_B_PRIO"
             ;;
+        -arb_parked)
+            SIM_EXTRA_DEFINES="${SIM_EXTRA_DEFINES:-} -D ARB_PARKED_GRANT"
+            export SIM_EXTRA_DEFINES
+            arb_arg="-arb_parked "
+            ;;
         *)
             testname="$key"
             ;;
@@ -51,7 +57,8 @@ done
 ###############################################################################
 if [ "$testname" == "" ]; then
   echo "ERROR	 : missing argument"
-  echo "USAGE	 : runsim <test name> [-seed <seed_nr>] [-hiperf | -fused [-fixed_b_prio]] [-random_ws]"
+  echo "USAGE	 : runsim <test name> [-seed <seed_nr>] [-hiperf | -fused [-fixed_b_prio]] [-random_ws] [-arb_parked]"
+  echo "           -arb_parked : bench arbiter parks the grant on default master M0 when idle"
   echo "Example	 : runsim simple_rdwr"
   echo ""
   echo "In order to switch the verilog simulator, the VERILOG_SIMULATOR environment"
@@ -144,5 +151,5 @@ fi
 trimmed_seed=$(echo "$seed" | xargs)
 echo ""
 echo "REPLAY:"
-echo "        ../bin/runsim ${design_arg}${priority_arg}${random_arg}-seed ${trimmed_seed}  ${testname}"
+echo "        ../bin/runsim ${design_arg}${priority_arg}${random_arg}${arb_arg}-seed ${trimmed_seed}  ${testname}"
 echo ""

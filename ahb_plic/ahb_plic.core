@@ -27,7 +27,7 @@ filesets:
       - rtl/verilog/plic_target.v
       - rtl/verilog/ahb_plic.v
     depend:
-      - arvern:ips:arv_common:1.0
+      - arvern:ips:arv_primitives:1.0
 
 targets:
   default: &default

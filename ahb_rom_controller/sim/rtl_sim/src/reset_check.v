@@ -41,7 +41,7 @@ initial
          $display("PASS:  hrdata is 0x%h after reset %t ns", hrdata, $time);
       end
 
-      // hreadyout: hard-wired to 1.
+      // hreadyout: high out of reset (it drops only in the first cycle of a write ERROR).
       if (hreadyout !== 1'b1) begin
          $display("ERROR: hreadyout not 1 after reset (got %b) %t ns", hreadyout, $time);
          error = error + 1;
@@ -49,7 +49,7 @@ initial
          $display("PASS:  hreadyout is 1 after reset %t ns", $time);
       end
 
-      // hresp: hard-wired to 0 (OKAY).
+      // hresp: OKAY out of reset (it is high only during a write ERROR).
       if (hresp !== 1'b0) begin
          $display("ERROR: hresp not 0 after reset (got %b) %t ns", hresp, $time);
          error = error + 1;

@@ -87,6 +87,31 @@ initial
 
 
       $display(" ===============================================");
+      $display("|  PRIV_CHECK_EN=1 : gate is per WINDOW         |");
+      $display(" ===============================================");
+
+      // The gate is decoded from the window's high address bits, not from the
+      // set of offsets a register actually occupies. So an offset that reads
+      // RAZ/WI from M-mode still ERRORs from a denied mode: a manager below the
+      // gate cannot map the window's contents by ERROR-vs-OK. unmapped_access
+      // covers the same offsets from M-mode, where they are all OK.
+      ahb_read (1, SUPERVISOR, 32'h00403FF0, 32'h00000000, 2, 1, ERROR); // in MSWI,   unmapped
+      ahb_write(1, SUPERVISOR, 32'h00403FF0, 32'hFFFFFFFF, 2, ERROR);
+      ahb_read (1, SUPERVISOR, 32'h00408000, 32'h00000000, 2, 1, ERROR); // in MTIMER, unmapped
+      ahb_read (1, USER,       32'h0040C800, 32'h00000000, 2, 1, ERROR); // in SSWI,   unmapped
+
+      // S-mode IS allowed in SSWI, so the same kind of offset is RAZ/WI there.
+      ahb_read (1, SUPERVISOR, 32'h0040C800, 32'h00000000, 2, 1, OK);
+
+      // Outside every window no gate claims the address, so it stays RAZ/WI at
+      // any privilege -- including User, which is denied in all three windows.
+      ahb_read (1, SUPERVISOR, 32'h0040D000, 32'h00000000, 2, 1, OK);
+      ahb_read (1, USER,       32'h0040D000, 32'h00000000, 2, 1, OK);
+      ahb_write(1, USER,       32'h0040D000, 32'hFFFFFFFF, 2, OK);
+      ahb_read (1, USER,       32'h0040D000, 32'h00000000, 2, 1, OK);
+
+
+      $display(" ===============================================");
       $display("|   PRIV_CHECK_EN=1 : S-mode SETSSIP edge fires |");
       $display(" ===============================================");
 
@@ -118,13 +143,25 @@ initial
       $display("|       Unmapped addresses : RAZ/WI from any    |");
       $display(" ===============================================");
 
-      // Unmapped addresses (between the four windows) must still RAZ/WI
-      // even from a denied privilege mode -- the error FSM gates on the raw
-      // sub-window decode, so an access that doesn't decode never errors.
-      ahb_read (1, SUPERVISOR, 32'h00408000, 32'h00000000, 2, 1, OK);
-      ahb_write(1, SUPERVISOR, 32'h00408000, 32'hFFFFFFFF, 2, OK);
+      // Unmapped addresses (outside every window) must still RAZ/WI even from a
+      // denied privilege mode -- the error FSM gates on the raw sub-window
+      // decode, so an access that doesn't decode never errors.
+      //
+      // 0x8000 is deliberately NOT used here. It is the upper half of the 32-KB
+      // MTIMER window (ACLINT Table 2 / CLINT compatibility), so it is M-only
+      // like the rest of MTIMER and an S-mode access correctly ERRORs. That is
+      // checked below rather than here.
       ahb_read (1, USER,       32'h0040E000, 32'h00000000, 2, 1, OK);
       ahb_write(1, USER,       32'h0040E000, 32'hFFFFFFFF, 2, OK);
+      ahb_read (1, SUPERVISOR, 32'h0040D000, 32'h00000000, 2, 1, OK);
+      ahb_write(1, SUPERVISOR, 32'h0040D000, 32'hFFFFFFFF, 2, OK);
+
+      // The upper half of the MTIMER window is M-only, exactly like the lower
+      // half. An unmapped offset INSIDE a window still RAZ/WIs for M-mode.
+      ahb_read (1, SUPERVISOR, 32'h00408000, 32'h00000000, 2, 1, ERROR);
+      ahb_write(1, SUPERVISOR, 32'h00408000, 32'hFFFFFFFF, 2, ERROR);
+      ahb_read (1, MACHINE,    32'h00408000, 32'h00000000, 2, 1, OK);
+      ahb_write(1, MACHINE,    32'h00408000, 32'hFFFFFFFF, 2, OK);
 
 
       $display(" ===============================================");

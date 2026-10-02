@@ -21,7 +21,7 @@ module  arv_ccsr_rdwr #(
 
 // AHB CLOCK & RESET
     input wire                    hclk_i,            // module clock
-    input wire                    hresetn_i,         // active-low async reset (sync-deassert required at IP boundary)
+    input wire                    hresetn_i,         // active-low reset, style per ARST_EN (sync de-assert required at IP boundary)
     output wire                   hclk_en_o,         // clock-gate enable = OR of per-register write pulses; forwarded to parent
 
 // READ-WRITE VALUES TO OUTSIDE WORLD

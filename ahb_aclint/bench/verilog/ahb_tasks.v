@@ -269,7 +269,7 @@ task zicntr_time_read;
    output [63:0]   val;           // captured 64-bit time snapshot
    input  [40*8:0] tag;           // label for logging
    integer         gnt_wait;
-   begin
+   begin : zt_body
       @(negedge free_clk);
       time_req = 1'b1;
 
@@ -282,7 +282,7 @@ task zicntr_time_read;
             error    = error + 1;
             time_req = 1'b0;
             val      = 64'hx;
-            disable zicntr_time_read;
+            disable zt_body;
          end
       end
 

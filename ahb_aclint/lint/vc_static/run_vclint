@@ -1,0 +1,275 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_vclint
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_vclint
+# Module Description : Run Synopsys VC Static lint on this IP's RTL.
+#----------------------------------------------------------------------------
+# The Verilator lint (sim/rtl_sim/run/run_lint) is unrelated and unaffected;
+# this is the signoff-grade flow. IDENTICAL IN EVERY IP: the IP name is the
+# directory, the top module and the elaboration parameters come from
+# sim/rtl_sim/bin/rtl_configs.py through bin/gen_rtl_params.py -- the same
+# table the Verilator lint sweep (and, where present, synthesis) iterate, so a
+# config cannot mean different things to different flows. Config 1 is the
+# IP's RTL defaults and is what a bare ./run_vclint lints.
+#
+# Run from inside the Synopsys container, or use ./run_vclint_d from the host.
+
+TOP=""
+JOBS=8
+DO_LANG=0
+RAW=0
+NO_QUIT=0
+RTL_CONFIG=""
+RTL_SWEEP=0
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+IP_NAME="$(basename "$IP_ROOT")"
+RESULTS="$SCRIPT_DIR/results"
+FLATTEN="$IP_ROOT/sim/rtl_sim/bin/flatten_filelist.py"
+FILELIST_SRC="$IP_ROOT/rtl/verilog/filelist.f"
+GEN_PARAMS="$IP_ROOT/sim/rtl_sim/bin/gen_rtl_params.py"
+
+usage() {
+    echo "Usage: $0 [options]"
+    echo "  -rtl_config N|NAME  Elaborate one config from sim/rtl_sim/bin/rtl_configs.py:"
+    echo "                      1-based index or label (default: config 1 = RTL defaults)."
+    echo "                      Results are also snapshotted to results_sweep/<label>/"
+    echo "  -rtl_sweep          Lint EVERY config. Writes a one-line-per-config summary to"
+    echo "                      results_sweep/sweep_summary.log; re-run -rtl_config for detail"
+    echo "  -list_configs       Print the config table and exit"
+    echo "  -top <name>         Override the top module the config names (e.g. a submodule)"
+    echo "  -j <count>          Parallel processes for the language checker (default: 8)"
+    echo "  -lang               Also run the LANGUAGE_CHECK stage. Much slower and much"
+    echo "                      noisier -- off by default; see rules.tcl"
+    echo "  -raw                Ignore rules.tcl and report EVERY enabled rule (firehose;"
+    echo "                      use this to re-derive the noise numbers behind the policy)"
+    echo "  -noquit, -i         Leave vc_static_shell open after the run"
+    echo "  -h, --help          This message"
+    exit "${1:-1}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -top|--top)                TOP="$2"; shift 2 ;;
+        -j|--j)                    JOBS="$2"; shift 2 ;;
+        -lang|--lang)              DO_LANG=1; shift ;;
+        -raw|--raw)                RAW=1; shift ;;
+        -rtl_config|--rtl_config)  RTL_CONFIG="$2"; shift 2 ;;
+        -rtl_sweep|--rtl_sweep)    RTL_SWEEP=1; shift ;;
+        -list_configs|--list_configs) python3 "$GEN_PARAMS" --list-configs; exit $? ;;
+        -noquit|--noquit|-i|--interactive) NO_QUIT=1; shift ;;
+        -h|--help)                 usage 0 ;;
+        *) echo "Unknown option: $1" >&2; usage 1 ;;
+    esac
+done
+
+if ! command -v vc_static_shell >/dev/null 2>&1; then
+    echo "Error: vc_static_shell not on PATH -- are you inside the Synopsys container?" >&2
+    echo "       Run ./run_vclint_d from the host instead." >&2
+    exit 1
+fi
+[[ -f "$FLATTEN" ]]      || { echo "Error: missing $FLATTEN" >&2; exit 1; }
+[[ -f "$FILELIST_SRC" ]] || { echo "Error: missing $FILELIST_SRC" >&2; exit 1; }
+[[ -f "$GEN_PARAMS" ]]   || { echo "Error: missing $GEN_PARAMS" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# SWEEP MODE: re-invoke this script once per config and keep only the summary.
+# ---------------------------------------------------------------------------
+if [[ $RTL_SWEEP -eq 1 ]]; then
+    [[ -n "$RTL_CONFIG" ]] && { echo "Error: -rtl_sweep and -rtl_config are mutually exclusive" >&2; exit 1; }
+    [[ $RAW -eq 1 ]] && { echo "Error: -raw and -rtl_sweep are mutually exclusive" >&2; exit 1; }
+    SWEEP_DIR="$SCRIPT_DIR/results_sweep"
+    LOG="$SWEEP_DIR/sweep_summary.log"
+    mkdir -p "$SWEEP_DIR"
+
+    CONFIGS=()
+    while IFS= read -r line; do CONFIGS+=("$line"); done \
+        < <(python3 "$GEN_PARAMS" --list-configs | awk -F'\t' '$1 ~ /^[0-9]+$/')
+    total=${#CONFIGS[@]}
+
+    { echo "# $IP_NAME VC Static lint sweep -- $total configs"
+      printf '#%4s  %-20s %6s %6s %6s %6s %8s  %s\n' idx label err warn info stale waived tags
+    } > "$LOG"
+
+    echo "================================================================"
+    echo " $IP_NAME VC STATIC LINT SWEEP: $total configs"
+    echo "   summary -> lint/vc_static/results_sweep/sweep_summary.log"
+    echo "================================================================"
+
+    LANG_FLAG=""
+    [[ $DO_LANG -eq 1 ]] && LANG_FLAG="-lang"
+    SWEEP_START=$SECONDS
+    fails=0
+    for entry in "${CONFIGS[@]}"; do
+        idx="${entry%%	*}"; rest="${entry#*	}"; label="${rest%%	*}"
+        out=$(env VCLINT_NO_SNAPSHOT=1 "$0" -rtl_config "$idx" $LANG_FLAG -j "$JOBS" 2>&1)
+        counts=$(printf '%s\n' "$out" | awk '/^VC Lint /{
+                     for(i=1;i<=NF;i++){split($i,a,"=");
+                     if(a[1]=="err")e=a[2]; if(a[1]=="warn")w=a[2];
+                     if(a[1]=="info")n=a[2]; if(a[1]=="waived")v=a[2];
+                     if(a[1]=="stale")st=a[2]}
+                     printf "%s %s %s %s %s", e, w, n, st, v; exit}')
+        [[ -z "$counts" ]] && { counts="- - - - -"; fails=$((fails+1)); }
+        tags=$(printf '%s\n' "$out" | awk '/Top tags/{t=1;next} t && NF>=3 && $3+0>0 {printf "%s%s=%s", (n++?",":""), $2, $3}')
+        printf '%5s  %-20s %6s %6s %6s %6s %8s  %s\n' "$idx" "$label" $counts "${tags:--}" >> "$LOG"
+        printf '  [%2s/%2s] %-20s %s\n' "$idx" "$total" "$label" "$(echo $counts | awk '{print "err="$1" warn="$2" stale="$4" waived="$5}')"
+    done
+
+    EL=$(( SECONDS - SWEEP_START ))
+    echo ""
+    echo "================================================================"
+    cat "$LOG"
+    echo "================================================================"
+    printf ' Sweep done: %d configs in %dh %dm %ds' "$total" $((EL/3600)) $(((EL%3600)/60)) $((EL%60))
+    [[ $fails -gt 0 ]] && printf '  (%d produced no report)' "$fails"
+    echo ""
+    [[ $fails -gt 0 ]] && exit 1
+    exit 0
+fi
+
+mkdir -p "$RESULTS"
+rm -rf "${RESULTS:?}"/*
+
+# Single source of truth for the RTL file set, shared with sim and synthesis.
+# Flattened in-container so the emitted paths are container-absolute.
+echo "Flattening $FILELIST_SRC ..."
+python3 "$FLATTEN" --format raw "$FILELIST_SRC" "$RESULTS/${IP_NAME}_flat.f" || exit 1
+
+# Emit ELABORATE_PARAMS, RTL_TOP and the per-parameter RTL_PARAM_* variables
+# (which rules.tcl / waivers.tcl branch on -- reset style above all) for one
+# config out of rtl_configs.py. Always generated, even for the default config,
+# so the top module is always read from the table rather than assumed.
+echo "Generating RTL parameters for config '${RTL_CONFIG:-1}'..."
+CONFIG_LABEL=$(python3 "$GEN_PARAMS" --rtl-config "${RTL_CONFIG:-1}" -o "$RESULTS/rtl_params.tcl") || exit 1
+CONFIG_TOP=$(awk -F'"' '/^set RTL_TOP /{print $2}' "$RESULTS/rtl_params.tcl")
+[[ -n "$TOP" ]] || TOP="$CONFIG_TOP"
+
+export VCLINT_TOP="$TOP"
+export VCLINT_FILELIST="$RESULTS/${IP_NAME}_flat.f"
+export VCLINT_STAGES="Structural_Check Netlist Quick_Lint"
+export VCLINT_JOBS="$JOBS"
+export VCLINT_DO_LANG="$DO_LANG"
+export VCLINT_PARAMS_FILE="$RESULTS/rtl_params.tcl"
+export VCLINT_RULES=""
+export VCLINT_WAIVERS=""
+[[ $RAW -eq 0 && -f "$SCRIPT_DIR/rules.tcl"   ]] && VCLINT_RULES="$SCRIPT_DIR/rules.tcl"
+[[            -f "$SCRIPT_DIR/waivers.tcl" ]] && VCLINT_WAIVERS="$SCRIPT_DIR/waivers.tcl"
+
+[[ $DO_LANG -eq 1 ]] && export VCLINT_STAGES="Language_Check Structural_Check Netlist Quick_Lint"
+
+echo "================================================================"
+echo " $IP_NAME VC STATIC LINT"
+echo "   top          : $TOP"
+echo "   stages       : $VCLINT_STAGES"
+echo "   config       : $CONFIG_LABEL"
+echo "   rule policy  : ${VCLINT_RULES:-<none -- RAW MODE>}"
+echo "   waivers      : ${VCLINT_WAIVERS:-<none>}"
+echo "================================================================"
+
+START_TIME=$SECONDS
+
+# vcst scatters WORK/, vcst_rtdb/, clog*, novas.* into its cwd -- run it from
+# results/ so all of it lands in the gitignored output dir.
+SHELL_ARGS=(-mode64 -f "$SCRIPT_DIR/vc_lint.tcl")
+[[ $NO_QUIT -eq 1 ]] && SHELL_ARGS+=(-i)
+
+( cd "$RESULTS" && vc_static_shell "${SHELL_ARGS[@]}" ) 2>&1 | tee "$RESULTS/vclint.log"
+rc=${PIPESTATUS[0]}
+
+ELAPSED=$(( SECONDS - START_TIME ))
+
+print_lint_summary() {
+    local summary="$RESULTS/report.lint_summary.txt"
+    local fatals=0 errors=0 warnings=0 infos=0 compressed=0 waived=0
+
+    if [[ -f "$summary" ]]; then
+        # Management Summary columns are NOT fixed: a "Waived" column appears
+        # only once at least one waiver matched, which shifts "Compressed".
+        # Map values via the header row rather than by position. Take the first
+        # "Total" after the header -- the Tree Summary has its own. Field
+        # comparisons only: the container's awk is mawk, which does not support
+        # POSIX [[:space:]] bracket expressions.
+        local -a v
+        v=( $(awk '/Management Summary/ {inms=1}
+                   inms && /Fatals/ {
+                       nc=0; for (i=1;i<=NF;i++) if ($i!="Stage" && $i!="Family") cols[++nc]=$i
+                   }
+                   inms && nc && $1=="Total" && $2 ~ /^[0-9]+$/ {
+                       for (i=2;i<=NF;i++) val[cols[i-1]]=$i
+                       printf "%d %d %d %d %d %d\n", val["Fatals"], val["Errors"], \
+                              val["Warnings"], val["Infos"], val["Waived"], val["Compressed"]
+                       exit
+                   }' "$summary") )
+        fatals=${v[0]:-0}; errors=${v[1]:-0}; warnings=${v[2]:-0}
+        infos=${v[3]:-0}; waived=${v[4]:-0}; compressed=${v[5]:-0}
+    fi
+    # Waivers that matched nothing this run -- stale, or conditional waivers
+    # registered in a configuration where they do not apply.
+    local stale=0
+    if [[ -f "$RESULTS/vclint.log" ]]; then
+        stale=$(awk '/waivers that matched nothing/ {f=1; next}
+                     f && $1=="Waiver" && $2==":" {c++}
+                     END {print c+0}' "$RESULTS/vclint.log")
+        stale=${stale:-0}
+    fi
+
+    local h=$((ELAPSED/3600)) m=$(((ELAPSED%3600)/60)) s=$((ELAPSED%60))
+    # "compressed" = near-identical violations folded into a reported one by
+    # compress_hdl. Raw total = reported + compressed.
+    printf "VC Lint %s [%s]: fatal=%s err=%s warn=%s info=%s stale=%s waived=%s  (%dh %dm %ds)\n" \
+        "$TOP" "$CONFIG_LABEL" "$fatals" "$errors" "$warnings" "$infos" "$stale" "$waived" "$h" "$m" "$s"
+    printf "            reported=%s  compressed=%s  raw total=%s\n" \
+        "$((fatals + errors + warnings + infos))" "$compressed" \
+        "$((fatals + errors + warnings + infos + compressed))"
+
+    # Tree Summary is already a per-tag histogram -- read it rather than
+    # re-counting report.lint_full.txt, whose per-tag output is limit-truncated.
+    if [[ -f "$summary" ]]; then
+        echo ""
+        echo "Top tags (severity / tag / count):"
+        awk '/Tree Summary/ {ints=1}
+             ints && ($1=="error"||$1=="warning"||$1=="fatal"||$1=="info") {
+                 printf "  %-8s %-38s %6s\n", $1, $3, $4
+             }' "$summary" | sort -k3 -rn | head -20
+    fi
+}
+
+echo ""
+echo "================================================================"
+echo " Summary"
+echo "================================================================"
+if [[ ! -f "$RESULTS/report.lint_summary.txt" ]]; then
+    echo "ERROR: no report produced -- see $RESULTS/vclint.log"
+    exit "${rc:-1}"
+fi
+print_lint_summary
+echo ""
+# results_sweep/<label>/ is the per-config record; only a run that is actually
+# representative of the config may overwrite it -- the config's own top, the
+# rule policy applied, the default stage set, and not the sweep (which keeps
+# only the summary).
+if [[ -n "$RTL_CONFIG" && "${VCLINT_NO_SNAPSHOT:-0}" != "1"
+      && $RAW -eq 0 && $DO_LANG -eq 0 && "$TOP" == "$CONFIG_TOP" ]]; then
+    snap="$SCRIPT_DIR/results_sweep/$CONFIG_LABEL"
+    mkdir -p "$snap"; rm -rf "${snap:?}"/*
+    cp "$RESULTS"/report.*.txt "$RESULTS"/rtl_params.tcl "$RESULTS"/vclint.log "$snap/" 2>/dev/null
+    echo " Snapshot: lint/vc_static/results_sweep/$CONFIG_LABEL/"
+fi
+echo " Reports in: lint/vc_static/results/"
+echo "   report.lint_summary.txt    management + tree summary"
+echo "   report.lint_full.txt       every violation, sorted, with file:line"
+echo "   report.lint_by_family.txt  per-family breakdown"
+echo "   report.lint_waived.txt     waived violations only"
+echo "================================================================"
+
+exit "$rc"

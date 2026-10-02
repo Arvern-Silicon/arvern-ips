@@ -53,7 +53,7 @@ localparam                  MEM_ADDRW    = $clog2(MEM_SIZE)-2; // Address width 
 // AHB CLOCK & RESET
 //======================================
 input  wire                 hclk_i;       // module clock (from the AHB clock domain)
-input  wire                 hresetn_i;    // active-low async reset (sync-deassert required at IP boundary)
+input  wire                 hresetn_i;    // active-low reset, style per ASYNC_RST_EN (sync de-assert required at IP boundary)
 output wire                 hclk_en_o;    // clock-gate enable; must drive an external ICG cell
 
 // AHB INTERFACE
@@ -64,7 +64,7 @@ input  wire           [2:0] hsize_i;      // transfer size (0=byte, 1=half-word,
 input  wire           [1:0] htrans_i;     // transfer type (NONSEQ/SEQ start an access; IDLE/BUSY skip)
 input  wire          [31:0] hwdata_i;     // write data (DPH-aligned)
 input  wire                 hwrite_i;     // write enable
-input  wire                 hsel_i;       // slave select
+input  wire                 hsel_i;       // Subordinate select (HSELx)
 output wire          [31:0] hrdata_o;     // read data (combinational, gated by per-byte read-cmd post-flop)
 output wire                 hreadyout_o;  // bus ready out (constant 1)
 output wire                 hresp_o;      // transfer response (constant 0)
@@ -169,11 +169,12 @@ arv_ipdff #(.WIDTH(3), .RST_VAL(IDLE), .ARST_EN(ASYNC_RST_EN)) u_state (
 // Utility signals for read
 assign sram_rd_cmd      = state_nxt[READ_BIT];
 
-// Utility signals for write
+// Utility signals for write. The registered state is decoded on full
+// compares so that an illegal encoding issues no SRAM write.
 assign sram_wr_cmd_pre  = state_nxt[WRITE_BIT];
-assign sram_wr_cmd      = state[WRITE_BIT];
-assign sram_wr_pause    = state[WRITE_BIT] &  aph_read;
-assign sram_wr_restore  = state[RPW_BIT]   & ~aph_read;
+assign sram_wr_cmd      = (state == WRITE);
+assign sram_wr_pause    = (state == WRITE)              &  aph_read;
+assign sram_wr_restore  = (state == READ_PENDING_WRITE) & ~aph_read;
 
 
 //=============================================================================
@@ -184,8 +185,9 @@ assign sram_wr_restore  = state[RPW_BIT]   & ~aph_read;
 // AHB response — no error response support
 //-------------------------------------------------
 
-// CPU raises misaligned exceptions before issuing AHB transactions,
-// so this controller doesn't need to generate error responses (it would be redundant and degrade timing)
+// Every transfer completes zero-wait with OKAY. Alignment is not checked: an
+// unaligned half-word or word uses the byte lanes of its containing half-word
+// or word.
 assign hreadyout_o    = 1'b1;
 assign hresp_o        = 1'b0;
 
@@ -205,7 +207,7 @@ arv_ipdff #(.WIDTH(MEM_ADDRW), .ARST_EN(ASYNC_RST_EN)) u_sram_wr_addr_buf (
                                                                                     .d_i (haddr_i[MEM_ADDRW+1:2]),
                                                                                     .q_o (sram_wr_addr_buf));
 
-arv_ipdff #(.WIDTH(4), .RST_VAL(4'b1111), .ARST_EN(ASYNC_RST_EN)) u_sram_wr_en_buf (
+arv_ipdff #(.WIDTH(4), .ARST_EN(ASYNC_RST_EN)) u_sram_wr_en_buf (
                                                .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(sram_wr_cmd_pre),
                                                                                     .d_i (sram_wr_en_nxt),
                                                                                     .q_o (sram_wr_en_buf));
@@ -291,9 +293,9 @@ assign hsize2_unused  = hsize_i[2];
 //=============================================================================
 // Aborts elaboration if MEM_SIZE is not a power of 2 of at least 8 bytes.
 // Lower bound: below 8 bytes, MEM_ADDRW (= $clog2(MEM_SIZE) - 2) becomes 0
-// or negative and produces illegal port slices. Upper bound: none — any
-// power-of-2 size up to the AHB address-space limit is valid; the practical
-// cap is whatever depth the attached SRAM macro supports. A non-power-of-2
+// or negative and produces illegal port slices. Upper bound: the parameter is
+// a 32-bit signed integer, so 2^30 bytes is the largest legal size; the
+// practical cap is the depth of the attached SRAM macro. A non-power-of-2
 // value would leave gaps in the address space and alias unmapped accesses.
 // pragma translate_off
 generate

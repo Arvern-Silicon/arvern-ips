@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "${1:-}" = "-cov" ]; then
+    exec ../bin/runcov
+fi
+
 # Disable waveform dumping
 SIMULATION_NODUMP=1
 export SIMULATION_NODUMP
@@ -35,21 +39,22 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     LOG_DIR=./log/$ii
     mkdir -p $LOG_DIR
      
-    # Two-Operand Arithmetic test patterns (asynchronous reset, default)
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr.log
-    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr.log
-    ../bin/runsim mdeleg_w_error              | tee $LOG_DIR/mdeleg_w_error.log
-    ../bin/runsim mdeleg_wo_error             | tee $LOG_DIR/mdeleg_wo_error.log
-
-    # Re-run the same test list with synchronous reset (ASYNC_RST_EN=0).
-    # Logs go to distinct <test>-sync.log files so ../bin/parse_results still
-    # picks them up as separate tests.
-    SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
-    export SIM_EXTRA_DEFINES
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr-sync.log
-    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr-sync.log
-    ../bin/runsim mdeleg_w_error              | tee $LOG_DIR/mdeleg_w_error-sync.log
-    ../bin/runsim mdeleg_wo_error             | tee $LOG_DIR/mdeleg_wo_error-sync.log
+    # Every test runs in three builds: the RTL defaults, synchronous reset
+    # (ASYNC_RST_EN=0) and a wider window (ADDRW=8). Logs are <test>.log,
+    # <test>-sync.log and <test>-addrw8.log, so ../bin/parse_results counts each
+    # build as a separate test.
+    TESTS="simple_rdwr pipelined_rdwr mdeleg_w_error mdeleg_wo_error mdeleg_no_alias \
+           denied_unmapped_ro denied_narrow hsize_oversize bus_stall_hsel \
+           burst_busy_seq error_hold reset_mid_transfer rw_data_walk \
+           ro_input_walk addrw8_upper_window ro_writes_hprot mdeleg_lanes"
+    for build in ":" "-sync:-D ASYNC_RST_EN=0" "-addrw8:-D ADDRW=8"; do
+        suffix="${build%%:*}"
+        SIM_EXTRA_DEFINES="${build#*:}"
+        export SIM_EXTRA_DEFINES
+        for t in $TESTS; do
+            ../bin/runsim $t                  | tee $LOG_DIR/$t$suffix.log
+        done
+    done
     unset SIM_EXTRA_DEFINES
 
 

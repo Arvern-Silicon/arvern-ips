@@ -1,0 +1,15 @@
+{signal: [
+  {name: 'scl_i',    wave: 'pp0.......ppppp'},
+  {name: 'scl_pd_o', wave: '001.......00000'},
+  {name: 'sda_i',    wave: '231....5..55555',
+   data: ['addr+R','ACK','status[7]','status','d[31:24]','d[23:16]','d[15:8]','d[7:0]']},
+  {},
+  {name: '',         wave: 'xx5....6..xxxxx',
+   data: ['DMI op in flight: SCL held low', 'MSB on SDA, SCL still held']}
+],
+  head: {text: 'Clock-stretch hides DMI busy; the release is two-step'},
+  foot: {text: ['tspan',
+    'The target holds SCL low (scl_pd_o) until the DMI access completes, presents the first data bit',
+    ['tspan', {x: 440, dy: 14}, 'with SCL still low, waits SDA_GUARD_LEN (8) clk_i, then releases SCL: SDA is settled before SCL rises.']]},
+  config: {hscale: 2}
+}

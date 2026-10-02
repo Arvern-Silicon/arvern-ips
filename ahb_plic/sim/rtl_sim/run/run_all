@@ -7,6 +7,9 @@
 if [ "$1" = "-sweep" ]; then
     exec ../bin/run_sweep.py
 fi
+if [ "$1" = "-cov" ]; then
+    exec ../bin/runcov
+fi
 
 # Disable waveform dumping
 SIMULATION_NODUMP=1
@@ -43,15 +46,11 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     LOG_DIR=./log/$ii
     mkdir -p $LOG_DIR
 
-    # PLIC test suite
-    ../bin/runsim priority_rdwr               | tee $LOG_DIR/priority_rdwr.log
-    ../bin/runsim enable_rdwr                 | tee $LOG_DIR/enable_rdwr.log
-    ../bin/runsim pending_gateway             | tee $LOG_DIR/pending_gateway.log
-    ../bin/runsim threshold_claim             | tee $LOG_DIR/threshold_claim.log
-    ../bin/runsim arbiter_tiebreak            | tee $LOG_DIR/arbiter_tiebreak.log
-    ../bin/runsim m_s_routing                 | tee $LOG_DIR/m_s_routing.log
-    ../bin/runsim unmapped_access             | tee $LOG_DIR/unmapped_access.log
-
+    # PLIC test suite: the default-config list of the sweep (sim_configs.py),
+    # so the two entry points cannot drift apart.
+    for t in $(python3 -c "import sys; sys.path.insert(0, '../bin'); import sim_configs; print(' '.join(sim_configs.DEFAULT_TESTS))"); do
+        ../bin/runsim $t                      | tee $LOG_DIR/$t.log
+    done
 
     # Report regression results
     ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log

@@ -1,0 +1,51 @@
+#!/bin/bash
+
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    run_default_subordinate
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_default_subordinate
+# Module Description : Run wrapper for the ahb_default_subordinate unit testbench.
+#----------------------------------------------------------------------------
+
+VERILOG_SIMULATOR=${VERILOG_SIMULATOR:-iverilog}
+SIMULATION_NODUMP=${SIMULATION_NODUMP:-0}
+
+SUBMITFILE=../../../bench/verilog/submit_default_subordinate.f
+
+echo " ======================================================="
+echo "| Start simulation: ahb_default_subordinate unit tb    |"
+echo " ======================================================="
+echo ""
+
+rm -rf simv simv_fixb *.vcd
+
+if [ "$VERILOG_SIMULATOR" != "iverilog" ]; then
+    echo "ERROR: Only iverilog is supported by this script."
+    exit 1
+fi
+
+NODUMP_FLAG=""
+[ "$SIMULATION_NODUMP" -eq 1 ] && NODUMP_FLAG="-D NODUMP"
+
+# Flatten the submit filelist to absolute paths so the portable
+# (file-relative) entries in $SUBMITFILE resolve correctly regardless
+# of cwd.  Output saved as submit_sim.f for debugging.
+FLATTEN_PY="$(dirname "$(realpath "$0")")/../bin/flatten_filelist.py"
+"$FLATTEN_PY" "$SUBMITFILE" ./submit_sim.f >/dev/null
+SUBMITFILE=./submit_sim.f
+
+# ----------------------------------------------------------------------------
+iverilog -o simv      -c $SUBMITFILE $NODUMP_FLAG
+if [ $? -ne 0 ]; then
+    echo "[ERROR] RR compilation failed."
+    exit 1
+fi
+./simv

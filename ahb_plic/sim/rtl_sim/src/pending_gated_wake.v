@@ -10,17 +10,15 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : pending_gated_wake
-// Module Description : Behavioral check of the hclk_en_o clock-gate advisory --
-//                      the dangling, never-checked output flagged in review
-//                      (ahb_plic.v:454: hclk_en_o = aph_valid | dph_valid |
-//                      (|pending_set_needed)). On a fully IDLE bus the clock is
-//                      gated OFF; the ONLY thing that can wake it to latch a new
-//                      pending bit is the `pending_set_needed` term. This parks
-//                      the bus until hclk is gated, then asserts a source and
-//                      proves the pending bit still gets set and the interrupt
-//                      fires. If that term were missing from hclk_en_o, the
-//                      clock would stay gated, the gateway flop would never
-//                      clock, and the interrupt would be lost -- caught here.
+// Module Description : Behavioral check of the hclk_en_o clock-gate advisory
+//                      (hclk_en_o = aph_valid | dph_valid | |pending_set_needed).
+//                      On a fully IDLE bus the clock is gated OFF; the only thing
+//                      that can wake it to latch a new pending bit is the
+//                      pending_set_needed term. This parks the bus until hclk is
+//                      gated, then asserts a source and proves the pending bit still
+//                      gets set and the interrupt fires. Without that term the clock
+//                      would stay gated, the gateway flop would never clock, and the
+//                      interrupt would be lost.
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE     32'h00400000

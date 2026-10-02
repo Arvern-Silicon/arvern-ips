@@ -11,13 +11,11 @@
 //----------------------------------------------------------------------------
 // File Name          : threshold_boundary
 // Module Description : Exact threshold boundary: the mask is STRICTLY greater
-//                      (plic_target.v:140, prio > threshold). threshold_claim
-//                      only tests prio well below / above threshold, never the
-//                      prio == threshold equality point, so a `>`->`>=` weakening
-//                      would pass. This pins prio == threshold (must mask, irq
-//                      low) and prio == threshold+1 (must pass, irq high).
-//                      Also confirms the claim winner is threshold-INDEPENDENT
-//                      (returns the source even while it is threshold-masked).
+//                      (prio > threshold in plic_target). Pins prio == threshold
+//                      (must mask, irq low) and prio == threshold+1 (must pass, irq
+//                      high), so a > -> >= weakening is caught. Also confirms the
+//                      claim winner is threshold-INDEPENDENT (returns the source
+//                      even while it is threshold-masked).
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE     32'h00400000

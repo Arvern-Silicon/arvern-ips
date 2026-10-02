@@ -1,0 +1,17 @@
+{signal: [
+  {name: 'sda',
+   wave: '62222222262355556',
+   data: ['S','addr+W','0x55','addr','d[31:24]','d[23:16]','d[15:8]','d[7:0]','op',
+          'Sr','addr+R','status','d[31:24]','d[23:16]','d[15:8]','d[7:0]','P']},
+  {name: 'ack',
+   wave: 'x44444444x455558x',
+   data: ['T','T','T','T','T','T','T','T','T','M','M','M','M','N']},
+  {},
+  {name: '',
+   wave: '2........xx3....x',
+   data: ['write request  (host drives SDA)', 'read response  (target drives SDA)']}
+],
+  head: {text: 'DMI transaction over I2C: a write request, then a repeated-START read of the response (each SDA cell = one bus byte)'},
+  foot: {text: 'S / Sr / P = START / repeated-START / STOP.   ACK row: T = target, M = master, N = master NACK on the last byte.'},
+  config: {hscale: 2}
+}

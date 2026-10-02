@@ -49,16 +49,21 @@ input           [3:0] sram_wen_i;    // SRAM write enable (low active)
 
 reg            [31:0] mem [0:(MEM_SIZE/4)-1];
 reg   [MEM_ADDRW-1:0] sram_addr_reg;
+reg                   sram_rd_q;     // the last edge sampled a read command
 
 wire           [31:0] mem_val = mem[sram_addr_i];
    
 initial
   begin
     sram_addr_reg = {MEM_ADDRW{1'b0}};
+    sram_rd_q     = 1'b0;
   end
 
 always @(posedge sram_clk_i)
-  if (~sram_cen_i & sram_addr_i<(MEM_SIZE/4))
+  sram_rd_q <= ~sram_cen_i & (sram_wen_i == 4'b1111);
+
+always @(posedge sram_clk_i)
+  if (~sram_cen_i)
     begin
       if      (sram_wen_i==4'b0000) mem[sram_addr_i] <= {sram_din_i[31:24], sram_din_i[23:16], sram_din_i[15:8], sram_din_i[7:0]};
 
@@ -73,7 +78,10 @@ always @(posedge sram_clk_i)
       sram_addr_reg <= sram_addr_i;
     end
 
-assign sram_dout_o = mem[sram_addr_reg];
+// Data is defined only in the cycle after a read command; any other cycle
+// returns a poison word, so a controller that uses sram_dout_o at another time
+// is caught.
+assign sram_dout_o = sram_rd_q ? mem[sram_addr_reg] : 32'hBAD0_BAD0;
 
 
 endmodule // sram

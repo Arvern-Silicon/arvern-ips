@@ -12,7 +12,7 @@
 // File Name          : ahb_pipelined
 // Module Description : Back-to-back (non-blocking) AHB transfers so a NONSEQ
 //                      address phase overlaps the previous data phase, hitting
-//                      the dph-re-latch-while-busy path (ahb_aclint.v:107). The
+//                      the dph-re-latch-while-busy path (ahb_aclint.v, u_dph / dph_en). The
 //                      standard tests use blocking=1, which inserts an IDLE
 //                      between beats, so this overlap was never stimulated.
 //                      Verifies the last write wins and nothing is dropped or

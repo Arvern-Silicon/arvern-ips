@@ -49,6 +49,6 @@ arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_toggle_priority (
 assign grant_o = toggle_priority ? {                request_i[1], request_i[0] & ~request_i[1]} : // Toggled priority: 1. M1 / 2. M0
                                    {~request_i[0] & request_i[1], request_i[0]                } ; // Default priority: 1. M0 / 2. M1
 
-endmodule
+endmodule // ahb_arbiter_2m
 
 `default_nettype wire

@@ -1,0 +1,11 @@
+`verilator_config
+
+// arv_cgate: `en_lat` is the INTENTIONAL transparent-low latch that makes the clock
+// gate glitch-free by construction. Verilog-2001 has no `always_latch` to signal
+// intent, so waive LATCH for that one signal.
+lint_off -rule LATCH -file "*/arv_cgate.v" -match "*en_lat*"
+
+// arv_dtm_cjtag: the TCKC-domain reset is dbgresetn_i itself and always asynchronous
+// (TCK_ARST: TCKC may be stopped), while the clk_i side follows ARST_EN. In the
+// ARST_EN=0 build the one pin therefore legitimately feeds both reset styles.
+lint_off -rule SYNCASYNCNET -file "*/arv_dtm_cjtag.v" -match "*dbgresetn_i*"

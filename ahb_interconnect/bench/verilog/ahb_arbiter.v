@@ -56,11 +56,14 @@ wire    [6-1:0] double_grant_vector;
 //       + Bit 3 is for AHB Master 0 (M0)
 //       + Bit 4 is for AHB Master 1 (M1)
 //       + Bit 5 is for AHB Master 2 (M2)   <-- unused (as wrap around to bit 0 when M2 is granted)
+// The priority rotates on request-backed grants only (grant_comb), so a
+// parked grant (ARB_PARKED_GRANT) does not count as a grant for fairness.
+wire    [2:0] grant_comb;
 always @(posedge hclk_i or negedge hresetn_i)
-  if (!hresetn_i)      double_request_mask  <= 6'b000111;  // Default priority order: 1. M0 / 2. M1 / 3. M2
-  else if (grant_o[0]) double_request_mask  <= 6'b001110;  // If M0 granted         : 1. M1 / 2. M2 / 3. M0
-  else if (grant_o[1]) double_request_mask  <= 6'b011100;  // If M1 granted         : 1. M2 / 2. M0 / 3. M1
-  else if (grant_o[2]) double_request_mask  <= 6'b000111;  // If M2 granted         : 1. M0 / 2. M1 / 3. M2
+  if (!hresetn_i)         double_request_mask  <= 6'b000111;  // Default priority order: 1. M0 / 2. M1 / 3. M2
+  else if (grant_comb[0]) double_request_mask  <= 6'b001110;  // If M0 granted         : 1. M1 / 2. M2 / 3. M0
+  else if (grant_comb[1]) double_request_mask  <= 6'b011100;  // If M1 granted         : 1. M2 / 2. M0 / 3. M1
+  else if (grant_comb[2]) double_request_mask  <= 6'b000111;  // If M2 granted         : 1. M0 / 2. M1 / 3. M2
 
 
 // Create double request vector
@@ -91,8 +94,24 @@ endfunction
 assign double_grant_vector = keep_first_one(double_request_vector);
 
 // Combine to generate the grant back
-assign grant_o = double_grant_vector[5:3] |
-                 double_grant_vector[2:0] ;
+assign grant_comb = double_grant_vector[5:3] |
+                    double_grant_vector[2:0] ;
+
+`ifdef ARB_PARKED_GRANT
+// Default-master variant (-arb_parked): when nobody requests, the grant is
+// parked on a fixed default master (M0) instead of being dropped -- the
+// classic AHB "default master" scheme, which saves the arbitration cycle
+// for the master most likely to transfer next. Legal under the documented
+// contract, which only asks the arbiter to settle the grant combinationally
+// in the same cycle. The fabric must cope with a grant that is not backed
+// by a same-cycle request.
+//
+// (Parking on the *last granted* master would not stress the fabric: that
+// master is the current data-phase owner and sees its own hready=0.)
+assign grant_o = (|request_i) ? grant_comb : 3'b001;
+`else
+assign grant_o = grant_comb;
+`endif
 
 
 endmodule

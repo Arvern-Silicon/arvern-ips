@@ -20,10 +20,12 @@
 `default_nettype none
 
 module  ahb_interconnect_generic #(
-    parameter                       NR_M         = 3,         // Number of AHB Managers
-    parameter                       NR_S         = 5,         // Number of AHB Subordinates
-    parameter                       HAUSER_W     = 1,         // Width of the HAUSER bus (min value is 1)
-    parameter                       ASYNC_RST_EN = 1'b1       // 1=async active-low reset, 0=synchronous reset
+    parameter                       NR_M          = 3,              // Number of AHB Managers
+    parameter                       NR_S          = 5,              // Number of AHB Subordinates
+    parameter                       HAUSER_W      = 1,              // Width of the HAUSER bus (min value is 1)
+    parameter          [4*NR_M-1:0] M_HMASTER_ID  = {4*NR_M{1'b0}}, // HMASTER ID of each manager (4 bits each); all-zero: manager i gets ID i
+    parameter          [4*NR_M-1:0] M_HMASTER_TAG = {4*NR_M{1'b0}}, // m_hmaster_i bits each manager may OR into its ID
+    parameter                       ASYNC_RST_EN  = 1'b1            // 1=async active-low reset, 0=synchronous reset
 ) (
 
 // AHB CLOCK & RESET
@@ -36,6 +38,7 @@ module  ahb_interconnect_generic #(
     input  wire       [32*NR_M-1:0] m_haddr_i,
     input  wire [HAUSER_W*NR_M-1:0] m_hauser_i,
     input  wire        [3*NR_M-1:0] m_hburst_i,
+    input  wire        [4*NR_M-1:0] m_hmaster_i,
     input  wire          [NR_M-1:0] m_hmastlock_i,
     input  wire        [4*NR_M-1:0] m_hprot_i,
     input  wire        [3*NR_M-1:0] m_hsize_i,
@@ -74,13 +77,21 @@ module  ahb_interconnect_generic #(
     output wire          [NR_S-1:0] s_hwrite_o
 );
 
+// All-zero M_HMASTER_ID selects the default numbering: manager i gets ID i
+localparam               [4*16-1:0] HMASTER_ID_SEQ = 64'hFEDC_BA98_7654_3210;
+localparam             [4*NR_M-1:0] HMASTER_ID     = (M_HMASTER_ID == {4*NR_M{1'b0}}) ? HMASTER_ID_SEQ[4*NR_M-1:0] : M_HMASTER_ID;
+
 
 //=============================================================================
 // 0)  PARAMETER RANGE CHECKS
 //=============================================================================
-// HMASTER ID array (section 2) holds 16 entries (4'h0..4'hF). NR_M must fit.
+// HMASTER is 4 bits wide, so at most 16 managers can hold distinct IDs.
+// Every value a manager can present (its ID OR any subset of its tag bits)
+// must be unique across managers: tag bits may not overlap the ID, and two
+// managers collide when their IDs agree on every bit neither of them tags.
 
 // pragma translate_off
+genvar gi, gj;
 generate
     if ((NR_M < 1) || (NR_M > 16)) begin : CHECK_NR_M
         initial $fatal(1, "ahb_interconnect_generic: NR_M (%0d) is out of range [1,16].", NR_M);
@@ -94,6 +105,16 @@ generate
      if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "ahb_interconnect_generic: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
     end
+    for (gi = 0; gi < NR_M; gi = gi + 1) begin : CHECK_M_HMASTER
+        if ((HMASTER_ID[4*gi+:4] & M_HMASTER_TAG[4*gi+:4]) != 4'h0) begin : TAG_IN_ID
+            initial $fatal(1, "ahb_interconnect_generic: manager %0d M_HMASTER_TAG overlaps its M_HMASTER_ID.", gi);
+        end
+        for (gj = gi + 1; gj < NR_M; gj = gj + 1) begin : PAIR
+            if (((HMASTER_ID[4*gi+:4] ^ HMASTER_ID[4*gj+:4]) & ~(M_HMASTER_TAG[4*gi+:4] | M_HMASTER_TAG[4*gj+:4])) == 4'h0) begin : COLLISION
+                initial $fatal(1, "ahb_interconnect_generic: managers %0d and %0d can present the same HMASTER.", gi, gj);
+            end
+        end
+    end
 endgenerate
 // pragma translate_on
 
@@ -102,8 +123,8 @@ endgenerate
 // 1)  INTERNAL WIRES/REGISTERS/PARAMETERS DECLARATION
 //=============================================================================
 
-wire            [4*16-1:0] m_hmaster;
-wire     [4*(16-NR_M)-1:0] m_hmaster_unused;
+wire          [4*NR_M-1:0] m_hmaster;
+wire          [4*NR_M-1:0] m_hmaster_unused;
 
 wire                [31:0] haddr;
 wire        [HAUSER_W-1:0] hauser;
@@ -113,7 +134,6 @@ wire                       hmastlock;
 wire                 [3:0] hprot;
 wire                [31:0] hrdata;
 wire                       hreadyout;
-wire                       hready_unused;
 wire                       hresp;
 wire                       hsel;
 wire                 [2:0] hsize;
@@ -148,9 +168,17 @@ wire                       hclk_en_dflt_subordinate;
 // 2)  AHB MANAGER MULTIPLEXOR
 //=============================================================================
 
-// HMASTER assignments for each manager
-assign m_hmaster = {4'hF, 4'hE, 4'hD, 4'hC, 4'hB, 4'hA, 4'h9, 4'h8,
-                    4'h7, 4'h6, 4'h5, 4'h4, 4'h3, 4'h2, 4'h1, 4'h0};
+// HMASTER of each manager: its ID combined with its enabled tag bits.
+// Example with NR_M = 3, manager 1 tagging on bit 3 (e.g. aRVern data_hmaster_o):
+//   M_HMASTER_ID  = 12'h000  -> default IDs {2, 1, 0}
+//   M_HMASTER_TAG = 12'h080  -> manager 1 may set bit 3 (m_hmaster_i[7])
+//   HMASTER: manager 0 = 4'h0, manager 1 = 4'h1 or 4'h9, manager 2 = 4'h2
+// With explicit IDs, M_HMASTER_ID = 12'h420 and M_HMASTER_TAG = 12'h010 give
+// 4'h0, 4'h2 or 4'h3, 4'h4.
+assign m_hmaster = HMASTER_ID | (m_hmaster_i & M_HMASTER_TAG);
+
+// Bits outside M_HMASTER_TAG are ignored (all of them at the default)
+assign m_hmaster_unused = m_hmaster_i;
 
 
 ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_manager_mux_inst (
@@ -165,7 +193,7 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .m_haddr_i         ( m_haddr_i             ),
     .m_hauser_i        ( m_hauser_i            ),
     .m_hburst_i        ( m_hburst_i            ),
-    .m_hmaster_i       ( m_hmaster[4*NR_M-1:0] ),
+    .m_hmaster_i       ( m_hmaster             ),
     .m_hmastlock_i     ( m_hmastlock_i         ),
     .m_hprot_i         ( m_hprot_i             ),
     .m_hready_i        ( m_hready_o            ),
@@ -194,15 +222,12 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .hmaster_o         ( hmaster               ),
     .hmastlock_o       ( hmastlock             ),
     .hprot_o           ( hprot                 ),
-    .hready_o          ( hready_unused         ),
     .hsel_o            ( hsel                  ),
     .hsize_o           ( hsize                 ),
     .htrans_o          ( htrans                ),
     .hwdata_o          ( hwdata                ),
     .hwrite_o          ( hwrite                )
 );
-
-assign m_hmaster_unused = m_hmaster[4*16-1:4*NR_M];
 
 
 //=============================================================================

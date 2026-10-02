@@ -1,0 +1,30 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Script:    run_all
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_all
+# Module Description : Run every arv_primitives test; one PASS/FAIL line each and a total.
+#                      Tests are self-checking (../src/<test>.v); build defines follow the name.
+#----------------------------------------------------------------------------
+
+cd "$(dirname "$0")"
+pass=0; fail=0
+for spec in "cells_contract" "reset_gen_sequence:LF_GATE=1" "reset_gen_sequence:LF_GATE=0" "osc_ctrl_sequence"; do
+    t="${spec%%:*}"; defs=""
+    [ "$spec" != "$t" ] && defs="${spec#*:}"
+    if ../bin/runsim $t $defs 2>&1 | grep -q "SIMULATION PASSED"; then
+        printf "  %-40s PASS\n" "$spec"; pass=$((pass+1))
+    else
+        printf "  %-40s FAIL\n" "$spec"; fail=$((fail+1))
+    fi
+done
+echo "  $pass passed, $fail failed"
+[ $fail -eq 0 ]

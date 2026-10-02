@@ -13,58 +13,71 @@
 - [Overview](#overview)
   - [Design parameters](#design-parameters)
   - [Module hierarchy](#module-hierarchy)
-  - [Port summary](#port-summary)
-  - [Access control](#access-control)
-  - [Clock gating](#clock-gating)
-  - [Integration requirements](#integration-requirements)
-  - [Lint waivers](#lint-waivers)
-- [Address map](#address-map)
+- [Programming model](#programming-model)
+  - [Address map](#address-map)
   - [Context numbering](#context-numbering)
   - [Priority window](#priority-window)
   - [Pending window](#pending-window)
   - [Enable window](#enable-window)
   - [Target window](#target-window)
-- [Gateway and arbitration](#gateway-and-arbitration)
+  - [Access control](#access-control)
   - [Level-triggered gateway](#level-triggered-gateway)
   - [Per-context arbiter](#per-context-arbiter)
   - [Claim / Complete handshake](#claim--complete-handshake)
-- [Repository layout](#repository-layout)
+- [Integration](#integration)
+  - [Port summary](#port-summary)
+  - [Clock gating](#clock-gating)
+  - [Integration requirements](#integration-requirements)
 - [Verification](#verification)
+  - [Scoreboard and coverage gate](#scoreboard-and-coverage-gate)
+  - [Configurations](#configurations)
+  - [Tests](#tests)
+  - [Signoff gates](#signoff-gates)
+  - [Lint conventions](#lint-conventions)
+  - [Core-level tests](#core-level-tests)
 - [Synthesis](#synthesis)
+- [Repository layout](#repository-layout)
 - [License](#license)
 
 ---
 
 ## Overview
 
-The **`ahb_plic`** module is a parametrisable IP that implements the
-RISC-V **PLIC** (Platform-Level Interrupt Controller) specification as a
-single AHB-Lite slave. It routes up to `NUM_SOURCES` external
-level-triggered interrupt lines into per-hart **M-mode** and (when
-`SU_MODE_EN=1`) **S-mode** interrupt outputs that connect to the aRVern
-core's `MIP.MEIP` / `MIP.SEIP` inputs.
+The **`ahb_plic`** module implements the RISC-V **PLIC** (Platform-Level
+Interrupt Controller) specification, version 1.0.0, as a single AHB-Lite
+subordinate. It routes up to `NUM_SOURCES` level-triggered interrupt
+lines into per-hart **M-mode** and (with `SU_MODE_EN=1`) **S-mode**
+interrupt outputs that connect to the aRVern core's `irq_m_external_i` /
+`irq_s_external_i` pins (`mip.MEIP` / `mip.SEIP`).
 
-The address layout matches the **SiFive PLIC** convention used by every
-mainstream RISC-V software stack (Linux's `drivers/irqchip/irq-sifive-plic.c`,
-OpenSBI, FreeRTOS, Zephyr, …), so existing PLIC drivers work unchanged on
-top of this IP. The IP lives entirely in the `hclk_i` clock domain — no
-CDC paths internally; the SoC integrator is responsible for synchronising
-foreign-clock IRQ sources at the boundary.
+The register layout is the specification's memory map (PLIC 1.0.0
+Chapter 3); the context-to-hart assignment, which the specification
+leaves to the platform, is `ctx = 2*hart + s_mode` (see
+[Context numbering](#context-numbering)). Every register is a 32-bit word
+accessed with word transfers only.
+
+The IP lives entirely in the `hclk_i` clock domain and contains no
+synchroniser; foreign-clock interrupt sources are synchronised by the
+integrator, on the clock named in
+[Integration requirements](#integration-requirements).
 
 ### Design parameters
 
-| Parameter         | Default       | Range        | Purpose |
-|-------------------|---------------|--------------|---------|
-| `NUM_SOURCES`     | `31`          | `1..1023`    | Number of usable IRQ sources. Source ID 0 is reserved by spec (no IRQ); usable IDs are `1..NUM_SOURCES`. Default `31` fits all pending and enable bits in a single 32-bit register word. |
-| `NUM_HARTS`       | `1`           | `1..16`      | Number of harts. Match `ahb_aclint`'s `NUM_HARTS`. |
-| `SU_MODE_EN`      | `1`           | `0` or `1`   | Enable per-hart S-mode context. Match the core's `SU_MODE_EN`. When `0`, only M-contexts exist; the S-context address windows are RAZ/WI and `irq_s_external_o` is tied 0. |
-| `PRIO_BITS`       | `3`           | `1..7`       | Priority width per source. Default `3` (8 priority levels) matches the SiFive default. `PRIO_BITS=1` is a cheap "enabled / disabled" mode for area-sensitive integrations. |
-| `PRIV_CHECK_EN` | `1`        | `0` or `1`   | IP-level privilege filter using `hprot_i[1]` + `hsmode_i`. When `1` (default), accesses are denied per the policy in [Access control](#access-control). When `0`, the privilege check is skipped (the integrator must rely on a fabric-level access check) but the size check stays active. |
-| `ASYNC_RST_EN`    | `1`           | `0` or `1`   | Reset architecture: `1` = asynchronous active-low reset (default); `0` = synchronous reset. Threaded to every flop via the shared `arv_ipdff` primitive. Synchronous mode requires the clock to be running during reset assertion. See the repo README's *Reset architecture* section. |
+| Parameter         | Default | Range        | Purpose |
+|-------------------|---------|--------------|---------|
+| `NUM_SOURCES`     | `31`    | `1..1023`    | Number of usable interrupt sources. Source ID 0 is reserved by the specification (no interrupt); usable IDs are `1..NUM_SOURCES`. The default keeps all pending and enable bits in one 32-bit word. |
+| `NUM_HARTS`       | `1`     | `1..16`      | Number of harts. Match `ahb_aclint`'s `NUM_HARTS`. `NUM_HARTS ≤ 16` keeps `NUM_CONTEXTS ≤ 32`, the capacity of the 4 KB enable window. |
+| `SU_MODE_EN`      | `0`     | `0` or `1`   | Instantiate a per-hart S-mode context. Match the core's `SU_MODE_EN` (same default). When `0`, contexts are numbered `ctx = hart`, context indices `>= NUM_HARTS` are RAZ/WI and `irq_s_external_o` is tied `0`. |
+| `PRIO_BITS`       | `3`     | `1..7`       | Priority width per source; `2^PRIO_BITS - 1` is the highest priority. `PRIO_BITS=1` is a two-level "enabled / disabled" mode for area-sensitive integrations. |
+| `PRIV_CHECK_EN`   | `1`     | `0` or `1`   | IP-level privilege filter using `hprot_i[1]` + `hsmode_i`, policy in [Access control](#access-control). When `0`, the privilege check is skipped (the integrator relies on a fabric-level check); the size check stays active. |
+| `ASYNC_RST_EN`    | `1`     | `0` or `1`   | Reset style: `1` = asynchronous active-low assertion, `0` = synchronous. Threaded to every flop through the shared `arv_ipdff` primitive; see [`README.md`](../../README.md#reset-architecture). |
 
-> **Parameter check.** Out-of-range parameters trigger a simulation-time
-> `$fatal` (e.g. `NUM_HARTS` outside `1..16`). The checks live in a
-> `pragma translate_off` block — synthesis is unaffected.
+> **Parameter ranges are the contract.** Simulation and lint reject an
+> out-of-range value with `$fatal`; **synthesis does not** — the guards are
+> under `translate_off` and no value is clamped, so an illegal value builds
+> a broken netlist silently (contexts alias in the enable decode above
+> `NUM_HARTS=16`; no priority register is writable at `NUM_SOURCES=1024`).
+> The integrator must respect the ranges.
 
 ### Module hierarchy
 
@@ -78,67 +91,157 @@ ahb_plic
 ```
 
 `NUM_CONTEXTS` is computed internally as
-`SU_MODE_EN ? 2*NUM_HARTS : NUM_HARTS`. The four storage sub-blocks
-(`plic_priority`, `plic_pending`, `plic_enable`) are always instantiated
-once each. The `plic_target` instances are spun up in a `generate-for`
-loop, one per context. When `SU_MODE_EN=0`, the loop instantiates
-`NUM_HARTS` targets (one M-context per hart). When `SU_MODE_EN=1`, the
-loop instantiates `2*NUM_HARTS` targets, alternating M/S per hart.
+`SU_MODE_EN ? 2*NUM_HARTS : NUM_HARTS`. The three storage sub-blocks
+(`plic_priority`, `plic_pending`, `plic_enable`) are instantiated once
+each; `plic_target` is instantiated in a `generate` loop, one per
+context — `NUM_HARTS` M-contexts when `SU_MODE_EN=0`, `2*NUM_HARTS`
+contexts alternating M/S per hart when `SU_MODE_EN=1`. Every sub-block
+answers in one cycle (`reg_ready_o` tied high), so every accepted
+transfer completes with zero wait states.
 
-### Port summary
+---
 
-| Direction | Port           | Width                  | Description |
-|-----------|----------------|------------------------|-------------|
-| in        | `hclk_i`       | 1                      | AHB clock |
-| in        | `hresetn_i`    | 1                      | Active-low reset — **asynchronous** assertion when `ASYNC_RST_EN=1` (default), **synchronous** when `ASYNC_RST_EN=0`; sync-deassert |
-| in        | `hsel_i`       | 1                      | AHB-Lite slave select |
-| in        | `haddr_i`      | 22                     | Byte address (4 MB PLIC window — covers the full SiFive register layout up to the max 32 contexts; the SoC fabric crops the system address to these 22 bits before presenting it) |
-| in        | `hwrite_i`     | 1                      | AHB write enable |
-| in        | `hsize_i`      | 3                      | Transfer size. Must be word (`3'b010`); sub-word and double-word accesses are rejected with an AHB ERROR (see [Access control](#access-control)). |
-| in        | `htrans_i`     | 2                      | Transfer type (NONSEQ/SEQ start an access) |
-| in        | `hprot_i`      | 4                      | AHB-Lite protection. Bit `[1]`: 1 = privileged, 0 = unprivileged. Other bits are ignored. Consumed only when `PRIV_CHECK_EN=1`. |
-| in        | `hsmode_i`     | 1                      | aRVern AHB extension. When `hprot_i[1]=1`: 0 = M-mode, 1 = S-mode. Don't-care when `hprot_i[1]=0`. Consumed only when `PRIV_CHECK_EN=1`. |
-| in        | `hready_i`     | 1                      | Bus ready in |
-| in        | `hwdata_i`     | 32                     | Write data |
-| out       | `hrdata_o`     | 32                     | Read data |
-| out       | `hreadyout_o`  | 1                      | Normally `1` (every sub-block is single-cycle); driven `0` for one cycle on the first cycle of a two-cycle ERROR response. |
-| out       | `hresp_o`      | 1                      | Normally `0`; driven `1` for both cycles of the two-cycle ERROR response when an access is denied (bad size or privilege violation). |
-| in        | `irq_src_i`    | `NUM_SOURCES+1`        | External IRQ lines, level-sensitive. Bit `[s]` carries source `s`; bit `[0]` is the reserved source-0 input and is ignored. |
-| out       | `irq_m_external_o`   | `NUM_HARTS`            | M-mode external IRQ per hart (drives the core's `MIP.MEIP`) |
-| out       | `irq_s_external_o`   | `NUM_HARTS`            | S-mode external IRQ per hart (drives the core's `MIP.SEIP`). Tied `0` when `SU_MODE_EN=0`. |
-| out       | `hclk_en_o`          | 1                      | Combinational clock-gate advisory: HIGH when the PLIC needs an `hclk_i` edge this cycle. Drive a SoC-side latch-based ICG. See [Clock gating](#clock-gating). |
+## Programming model
+
+### Address map
+
+The subordinate occupies a **4 MB window** (22-bit byte address): a slice
+of the specification's memory map large enough for the 32 contexts the IP
+can implement. The implemented register footprint is much smaller;
+everything else in the window is RAZ/WI for M- and S-mode masters
+(U-mode is denied everywhere in the window, see
+[Access control](#access-control)).
+
+| Offset                          | Window                             | Notes |
+|---------------------------------|------------------------------------|-------|
+| `0x000000 + 4*src`              | **Priority** (4 KB)                | one word per source |
+| `0x001000 + 4*w`                | **Pending** (4 KB)                 | one bit per source, 32 sources per word, read-only |
+| `0x002000 + 0x80*ctx + 4*w`     | **Enable** (4 KB, `0x002000`–`0x002FFF`; 128 bytes per context) | same packing as pending |
+| `0x200000 + 0x1000*ctx`         | **Target[ctx]** (8 bytes used)     | `+0` threshold, `+4` claim/complete |
+| outside the above               | reserved                           | RAZ/WI (M and S; U-mode is denied) |
+
+`haddr_i[1:0]` is ignored: word transfers are assumed aligned, as
+AHB-Lite requires. A protocol-violating misaligned word address lands on
+its containing word with OKAY.
+
+**Reset values.** Every register resets to 0: priorities, enables,
+thresholds, pending and in-service bits. No interrupt output is asserted
+after reset until firmware programs a non-zero priority and an enable. A
+source line already high when reset is released pends on the first clock
+edge after it. With `ASYNC_RST_EN=0` the flops take these values on the
+first `hclk_i` edge while reset is asserted, so every output is defined
+from that edge on; the clock must run during reset (see
+[Clock gating](#clock-gating)).
+
+**When a write takes effect.** A register write commits on the clock edge
+that ends its data phase. The data phase of the next transfer already
+reads the new value, and `irq_*_external_o` reflects it from that edge.
+
+### Context numbering
+
+| `SU_MODE_EN` | Context index `ctx`                 | Number of contexts |
+|--------------|-------------------------------------|--------------------|
+| `1`          | `ctx = 2*hart + s_mode` (M=0, S=1)  | `2 * NUM_HARTS`    |
+| `0`          | `ctx = hart`                        | `NUM_HARTS`        |
+
+With `SU_MODE_EN=1, NUM_HARTS=1`: ctx 0 = hart 0 M-mode, ctx 1 = hart 0
+S-mode. With `SU_MODE_EN=1, NUM_HARTS=2`: hart0/M, hart0/S, hart1/M,
+hart1/S. With `SU_MODE_EN=0, NUM_HARTS=2`: ctx 0 = hart0/M, ctx 1 =
+hart1/M; ctx 2 and above are RAZ/WI.
+
+Context indices `>= NUM_CONTEXTS` have no enable block and no target
+stride: those offsets are RAZ/WI.
+
+### Priority window
+
+One `PRIO_BITS`-wide priority register per source, in the low bits of a
+32-bit word at byte offset `4*src`. Bits above `PRIO_BITS-1` are RAZ/WI.
+
+| Offset               | Register                          | Bits |
+|----------------------|-----------------------------------|------|
+| `0x0000`             | `priority[0]` — reserved          | RAZ/WI |
+| `0x0004`             | `priority[1]`                     | `[PRIO_BITS-1:0]` |
+| `4*src`              | `priority[src]` (src = 1..NUM_SOURCES) | (same) |
+| `4*(NUM_SOURCES+1)` and above | reserved                 | RAZ/WI |
+
+Priority 0 = "never interrupt" (PLIC 1.0.0 Chapter 4); priority 1 is the
+lowest active level and `2^PRIO_BITS - 1` the highest. A source at
+priority 0 neither interrupts nor wins a claim — see
+[Per-context arbiter](#per-context-arbiter).
+
+### Pending window
+
+Pending bits packed 32 sources per word, **read-only** (writes are
+accepted with OKAY and ignored). Bit `b` of word `w` is source
+`32*w + b` (PLIC 1.0.0 Chapter 5); bit 0 of word 0 (source 0) reads 0,
+as do all bits above `NUM_SOURCES`.
+
+| Offset                                  | Word              | Bits |
+|-----------------------------------------|-------------------|------|
+| `0x1000`                                | pending word 0    | `[0]` = source 0 (always 0), `[1]` = source 1, … |
+| `0x1004`                                | pending word 1    | `[0]` = source 32, … |
+| `0x1000 + 4*w`                          | pending word `w`  | (same packing) |
+| `0x1000 + 4*ceil((NUM_SOURCES+1)/32)` and above | reserved  | RAZ/WI |
+
+A pending bit is set by the gateway and cleared only by a claim: the
+only way to clear `pending[s]` is a claim by a context that has the
+source enabled (Chapter 5: "A pending bit in the PLIC core can be
+cleared by setting the associated enable bit then performing a claim").
+A claim returns only a source of non-zero priority, so the pending bit of
+a source at priority 0 stays set until its priority is raised and it is
+claimed. The source line dropping never clears it.
+
+### Enable window
+
+Per-context enable bits, packed 32 sources per word like the pending
+window. Each context owns a 128-byte block (32 words). Bit 0 of word 0
+(source 0) is RAZ/WI in every context: the specification defines the
+bit, the IP hard-ties it to 0 since no interrupt can arrive on source 0.
+
+| Offset                                                | Register              | Notes |
+|-------------------------------------------------------|-----------------------|-------|
+| `0x2000 + 0x80*ctx + 4*w`                             | `enable[ctx][word w]` | RW, `[b]` = source `32*w + b` |
+| `0x2000 + 0x80*ctx + 4*w`, `w >= ceil((NUM_SOURCES+1)/32)` | reserved         | RAZ/WI |
+| `0x2000 + 0x80*ctx + …`, `ctx >= NUM_CONTEXTS`        | reserved              | RAZ/WI |
+
+### Target window
+
+Each context owns a 4 KB-strided block holding its threshold and its
+claim/complete register. Only the first 8 bytes are used; the rest of
+the stride is RAZ/WI.
+
+| Offset                          | Register              | Behaviour |
+|---------------------------------|-----------------------|-----------|
+| `0x200000 + 0x1000*ctx + 0x0`   | `threshold[ctx]`      | RW, `PRIO_BITS` wide (upper bits RAZ/WI). The context is notified only of sources whose priority is **strictly greater** than the threshold; `threshold = 2^PRIO_BITS - 1` masks every source. |
+| `0x200000 + 0x1000*ctx + 0x4`   | `claim_complete[ctx]` | **Read = claim**: returns the ID of the highest-priority pending-and-enabled source for this context, or 0 if there is none — independent of the threshold (Chapter 8) — and on the same clock edge sets `in_service[id]` and clears `pending[id]`. **Write = complete**: a write is a completion only when the **whole 32-bit word** is an ID in `1..NUM_SOURCES` (any bit above `[10]` set makes it invalid, not an alias of its low bits) **and** that source is enabled for this context (Chapter 9); it then clears `in_service[N]`. Any other write is ignored with OKAY. |
+| other offsets in the stride     | reserved              | RAZ/WI |
+
+> **Claim atomicity.** The claim read returns its ID and performs the
+> `in_service[id] ← 1` / `pending[id] ← 0` update on the same clock edge,
+> the one that completes the AHB data phase. There is no intermediate
+> state: the next bus cycle observes both the returned ID and the cleared
+> pending bit.
 
 ### Access control
 
-The IP enforces two orthogonal access checks on every AHB transaction;
-either failing denies the access and triggers a two-cycle AHB ERROR
-response.
+Two orthogonal checks are applied to every transfer; either failing
+denies the access with a two-cycle AHB ERROR response.
 
-#### 1. Access size (always enforced)
+**Access size (always enforced).** PLIC 1.0.0 Chapter 3: *"The
+memory-mapped registers specified in this chapter have a width of
+32-bits. The bits are accessed atomically with LW and SW instructions."*
+Only word transfers (`hsize_i = 3'b010`) are accepted; a byte, halfword,
+double-word or wider transfer is denied, whatever `PRIV_CHECK_EN` says. This
+catches a wrongly sized store early instead of silently committing part
+of a register. `HBURST` is not an input: bursts of word transfers are
+accepted beat by beat, each beat landing exactly as a single transfer
+would; a beat is denied only when it is not word-sized or fails the
+privilege filter.
 
-The PLIC 1.0 specification (Chapter 3) mandates 32-bit word (LW/SW)
-accesses to every memory-mapped register: *"The memory-mapped registers
-specified in this chapter have a width of 32-bits. The bits are accessed
-atomically with LW and SW instructions."* The IP enforces this strictly
-— any access with `hsize_i ≠ 3'b010` (i.e. byte, halfword, double-word,
-or burst) is denied. This catches firmware bugs early (e.g. a `sb` of
-the wrong type into the priority register) rather than silently
-truncating or extending the access.
-
-The size check runs independently of `PRIV_CHECK_EN` — it is always on,
-because there is no spec-defined behaviour for sub-word accesses and the
-risk of silently committing garbage to a register is the same regardless
-of who issued the bus access.
-
-#### 2. Privilege filter (`PRIV_CHECK_EN=1`)
-
-When `PRIV_CHECK_EN=1` (the default), the IP enforces a per-access
-privilege check using `hprot_i[1]` and `hsmode_i`. This is **defense in
-depth** on top of any fabric-level access policy — the goal is to prevent
-a misbehaving bus master from corrupting PLIC state even if the fabric's
-address decoder has a bug.
-
-**Privilege encoding** (per the aRVern AHB dialect):
+**Privilege filter (`PRIV_CHECK_EN=1`).** Defence in depth on top of any
+fabric-level policy: a misbehaving master cannot corrupt PLIC state even
+if the fabric's decoder lets it through. The privilege of a transfer is
+decoded from `hprot_i[1]` and `hsmode_i` (the aRVern AHB dialect):
 
 | `hprot_i[1]` | `hsmode_i` | Privilege |
 |--------------|------------|-----------|
@@ -146,399 +249,490 @@ address decoder has a bug.
 | 1            | 1          | S-mode    |
 | 0            | x          | U-mode    |
 
-**Access policy** (window-level):
+| Window                                    | M-mode | S-mode | U-mode |
+|-------------------------------------------|:------:|:------:|:------:|
+| Priority                                  | RW     | RW     | DENY   |
+| Pending                                   | RO²    | RO²    | DENY   |
+| Enable block of an M-context              | RW     | DENY¹  | DENY   |
+| Enable block of an S-context              | RW     | RW     | DENY   |
+| Target of an M-context (offsets `+0`, `+4`) | RW   | DENY¹  | DENY   |
+| Target of an S-context                    | RW     | RW     | DENY   |
+| Reserved / unmapped offsets               | RAZ/WI | RAZ/WI | DENY   |
 
-| Window                              | M-mode | S-mode | U-mode |
-|-------------------------------------|:------:|:------:|:------:|
-| Priority (`0x000000 – 0x000FFF`)    | RW     | RW     | DENY   |
-| Pending (`0x001000 – 0x001FFF`)     | RO     | RO     | DENY   |
-| Enable for an M-context (`ctx[0]=0`)| RW     | DENY   | DENY   |
-| Enable for an S-context (`ctx[0]=1`)| RW     | RW     | DENY   |
-| Target for an M-context             | RW     | DENY   | DENY   |
-| Target for an S-context             | RW     | RW     | DENY   |
+¹ The S-mode deny mask is the whole 128-byte enable block of every
+M-context and the first 8 bytes of every M-context's 4 KB target stride,
+including words that hold no register. Context indices `>= NUM_CONTEXTS`
+are RAZ/WI for M and S alike, so an S-mode master can learn the number
+of contexts by probing, but not the number of sources.
 
-When `SU_MODE_EN=0`, every context is an M-context, so an S-mode master
-that reaches the PLIC will be denied access to all enable / target
-windows (it can still read priority and pending). U-mode is always denied
-everything.
+² A write to the pending window completes with OKAY and is ignored.
 
-The privilege check fires only on accesses that actually land on a
-real context register; out-of-range addresses inside the enable /
-target windows (e.g. ctx >= NUM_CONTEXTS) are RAZ/WI'd via the
-sub-block decode rather than denied, avoiding an address-layout
-info leak via ERROR-vs-OK probing.
+When `SU_MODE_EN=0` every context is an M-context, so an S-mode master
+is denied the enable block and target of every implemented context (it
+can still read priority and pending). U-mode is denied everywhere in the 4 MB window,
+reserved offsets included. When `hsmode_i` is tied `0` (a fabric without
+the `HAUSER` sideband) every privileged access decodes as M and the
+S-mode column collapses onto the M-mode column — see
+[Integration requirements](#integration-requirements).
 
-**Disabling the filter.** Set `PRIV_CHECK_EN=0` if the SoC fabric
-already enforces a privilege check at the address-decoder level, or if
-the integration genuinely has no privilege control. In that case
-`hprot_i` and `hsmode_i` are still inputs (so the integrator wires them
-up regardless) but the IP ignores them for the privilege decision.
-**The size check (1, above) remains active.**
+**Disabling the filter.** Set `PRIV_CHECK_EN=0` if the fabric already
+enforces a privilege policy at its address decoder, or if the integration
+has no privilege control. `hprot_i` and `hsmode_i` remain inputs (wire
+them up) but do not take part in the decision. **The size check remains
+active.**
 
-#### Denial behaviour (shared by both checks)
+**Denial behaviour.** A denied access — wrong size or privilege
+violation — produces the AHB-Lite two-cycle ERROR response:
 
-A denied access — sub-word size **or** privilege violation — produces
-the spec-compliant AHB-Lite **two-cycle ERROR response**:
+| Cycle               | `hreadyout_o` | `hresp_o` |
+|---------------------|:-------------:|:---------:|
+| Data phase, cycle 1 | 0 (stall)     | 1 (ERROR) |
+| Data phase, cycle 2 | 1 (release)   | 1 (ERROR) |
 
-| Cycle             | `hreadyout_o` | `hresp_o` |
-|-------------------|:-------------:|:---------:|
-| Data phase, cycle 1 | 0 (stall)   | 1 (ERROR) |
-| Data phase, cycle 2 | 1 (release) | 1 (ERROR) |
-
-After cycle 2 the slave returns to idle. The addressed sub-block's
-`reg_sel_i` is gated to 0 throughout the denied data phase, so the
-write does not reach the storage and any read returns `0` (RAZ — the
-data bus is not connected). The two-cycle pattern lets the AHB master
-take an access-fault trap on the same cycle `hreadyout` releases,
-rather than continuing past a silently-dropped access. In the aRVern
-core this surfaces as a `load_access_fault` (cause 5) on a denied read
-or a `store_access_fault` (cause 7) on a denied write — putting
-misbehaving firmware on notice rather than allowing it to corrupt PLIC
-state silently.
-
-### Clock gating
-
-`hclk_en_o` is a **combinational** advisory output that says "the PLIC needs
-an `hclk_i` edge this cycle." It goes HIGH only when one of the IP's flops
-will actually transition this cycle:
-
-- An AHB-Lite address phase is selecting this slave (`hsel & hready & htrans[1]`)
-  — about to latch `dph_valid` / `dph_addr` / `dph_size` / `dph_hsmode` /
-  `dph_hprot1` / `dph_write`.
-- An AHB-Lite data phase is in flight — register writes (priority, enable,
-  threshold), `claim` and `complete` pulses, and the two-cycle error FSM all
-  advance in `dph_valid` cycles.
-- The gateway is about to set a pending bit 0→1 — i.e. a source `s` in
-  `1..NUM_SOURCES` satisfies `~in_service[s] & irq_src_i[s] & ~pending[s]`.
-  This is the only state transition that is not AHB-driven.
-
-It goes LOW in all stable states — including `pending=1` with the source
-still asserted (the target arbiter that drives `irq_*_external_o` is
-purely combinational on `pending / enable / priority / threshold` and
-does not consume the PLIC clock), and `in_service=1` waiting for the
-`complete` write to arrive (the matching `complete` is an AHB write,
-which raises `hclk_en_o` via the address-phase term as soon as the
-master asserts `hsel`).
-
-> **WFI wake.** The `pending_set_needed` term rises combinationally as soon
-> as `irq_src_i[s]` goes high into a quiescent PLIC (pending=0, in_service=0).
-> So a peripheral asserting its IRQ line will re-open the SoC clock on the
-> very next free-clock cycle even if the core was deep in WFI sleep with
-> every domain gated off.
-
-**Integration pattern (SoC side).** Wire `hclk_en_o` into a latch-based ICG
-cell (CKLNQD / LSCKDP-style, with a negative-level enable latch) gating
-`hclk_i`. Do **not** AND `hclk_en_o` with the free-running clock combinationally
-and feed the result to a flop clock pin — that exposes any glitches on
-`hclk_en_o` (from address-decode transitions etc.) to flop clock inputs. The
-testbench at `bench/verilog/tb_ahb_plic.v` models a proper ICG via a
-level-sensitive latch on `~free_clk`, the same convention as the
-`arv_custom_csr` IP.
-
-```verilog
-// SoC-side ICG model (reference)
-reg hclk_en_latch;
-always @(free_clk or hclk_en_o)
-    if (~free_clk)
-        hclk_en_latch <= hclk_en_o;
-assign hclk_i = free_clk & hclk_en_latch;
-```
-
-> **Note.** `hclk_en_o` does NOT include source 0 in its OR-reduce since
-> source 0 is reserved (priority/pending/enable all hard-tied to 0) and can
-> never contribute. The integrator may safely treat the bit as unused.
-
-### Integration requirements
-
-- **Reset (`hresetn_i`)** — active-low, asynchronously asserted. The
-  assertion style follows `ASYNC_RST_EN` (async when `1`, synchronous
-  when `0`; synchronous mode needs a running clock during reset
-  assertion). The
-  **de-assert edge must be synchronised to `hclk_i`** at the integration
-  boundary. The IP contains no internal reset synchroniser; an
-  unsynchronised de-assert produces metastability on the first capture
-  edge.
-
-- **IRQ source synchronisation** — `irq_src_i[s]` MUST be presented as an
-  `hclk_i`-synchronous level. The level-triggered gateway in
-  `plic_pending` samples it directly without any per-source synchroniser
-  (see `ahb_plic.v` port comment and `plic_pending.v:46, 112`). If a
-  source originates from a different clock domain (e.g. an always-on
-  GPIO, an LF-domain watchdog), the integrator MUST place a 2-FF
-  synchroniser at the IP boundary — the shared `arv_synchronizer` cell
-  (`arv_common/rtl/verilog/arv_synchronizer.v`) is the recommended
-  building block. The PLIC intentionally does **not** instantiate
-  per-source synchronisers internally because most platform IRQ sources
-  already live in `hclk_i`, and gating the unneeded synchronisers is the
-  integrator's choice.
-
-- **AHB-Lite signalling** — `htrans_i[0]` (BUSY) is ignored: a
-  NONSEQ/SEQ start (`htrans_i[1]=1`) launches an access. `hsize_i` is
-  enforced — only word (`3'b010`) is accepted; sub-word, double-word
-  and burst accesses receive an AHB ERROR response. Firmware MUST use
-  LW/SW for every PLIC register access per the PLIC 1.0 spec.
-
-- **`irq_src_i[0]` is reserved** — the IP ties source 0 internally to
-  "no IRQ" (priority 0, pending 0, enable 0 for every context); reads
-  of source-0 priority return 0; writes are ignored. The integrator may
-  tie `irq_src_i[0]` to either `0` or `1` — it makes no difference.
-
-- **AHB serialises claim races** — when two contexts could in principle
-  claim the same source on the same cycle (a multi-hart deployment with
-  `MEIP` and `SEIP` both wanting to claim the same external line), the
-  AHB master serialises the accesses naturally: only one context's
-  claim-read address can be on the bus per cycle. Whichever read happens
-  first wins; the second read returns `0` (no IRQ to claim) because the
-  first read's `in_service` set has cleared the pending bit. **The IP
-  contains no inter-context arbiter** — it relies entirely on AHB-Lite's
-  built-in single-transaction-per-cycle property.
-
-### Lint waivers
-
-The RTL ships clean under `verilator --lint-only -Wall -Wpedantic` with
-an empty waiver file (see `sim/rtl_sim/run/waivers.vlt`). Intentionally
-unused signals (`htrans_i[0]`, the cacheable / bufferable / data bits
-of `hprot_i`, byte-lane bits of register addresses, source-0 input
-lines) are routed to explicit sink wires named with an `_unused`
-suffix so a single tool-agnostic regex (`*_unused*`) can waive the
-residual warning in any lint tool. Keep the suffix when adding RTL.
-
----
-
-## Address map
-
-The AHB slave occupies a fixed **4 MB window** (22-bit byte address).
-This covers the full SiFive PLIC layout up to 32 contexts. The actual
-implemented register footprint is much smaller; everything else in the
-window is RAZ/WI.
-
-| Offset                         | Window                                   | Notes |
-|--------------------------------|------------------------------------------|-------|
-| `0x000000 – 0x000FFF`          | **Priority** (4 KB)                      | one word per source |
-| `0x001000 – 0x001FFF`          | **Pending** (4 KB)                       | one bit per source, 32 sources / word |
-| `0x002000 – 0x002000 + 0x80×NUM_CONTEXTS` | **Enable** (per context × per word)  | RW; same packing as pending |
-| `0x200000 + 0x1000×ctx`        | **Target[ctx]** (8 bytes used)           | `+0` threshold, `+4` claim/complete |
-| outside the above ranges       | reserved                                 | RAZ/WI |
-
-### Context numbering
-
-| `SU_MODE_EN` | Context index `ctx` | Number of contexts |
-|--------------|---------------------|--------------------|
-| `1`          | `ctx = 2*hart + s_mode` (M=0, S=1)  | `2 * NUM_HARTS` |
-| `0`          | `ctx = hart`                        | `NUM_HARTS`     |
-
-So with `SU_MODE_EN=1, NUM_HARTS=1`, ctx 0 = hart 0 M-mode, ctx 1 = hart 0
-S-mode. With `SU_MODE_EN=1, NUM_HARTS=2`, the four contexts in order are
-hart0/M, hart0/S, hart1/M, hart1/S. With `SU_MODE_EN=0, NUM_HARTS=2`, the
-two contexts are hart0/M, hart1/M (the would-be S-context address windows
-RAZ/WI).
-
-This is the SiFive convention. Linux's PLIC driver expects exactly this
-interleaving.
-
-### Priority window
-
-`PRIO_BITS`-wide priority register per source, in the low bits of a
-32-bit word at byte offset `4*src`.
-
-| Offset            | Register                          | Bits |
-|-------------------|-----------------------------------|------|
-| `0x0000`          | `priority[0]` — RAZ/WI (reserved) | always 0 |
-| `0x0004`          | `priority[1]`                     | `[PRIO_BITS-1:0]` |
-| `4*src`           | `priority[src]` (src = 1..NS)     | (same) |
-| `4*(NS+1)` and above | RAZ/WI                          | — |
-
-Priority 0 = "never interrupt"; priority 1 = lowest enabled; priority
-`(2^PRIO_BITS)-1` = highest. The arbiter inside each `plic_target`
-treats priority 0 specially — see [Per-context arbiter](#per-context-arbiter).
-
-### Pending window
-
-Pending bits packed 32 sources per word, **read-only from the AHB
-side**. Bit `b` of word `w` corresponds to source ID `32*w + b`. Bit 0
-of word 0 (source 0) always reads as 0. Source IDs > `NUM_SOURCES`
-read as 0.
-
-| Offset            | Word                  | Bits |
-|-------------------|-----------------------|------|
-| `0x1000`          | pending[31:0]         | `[0]=src0 (always 0)`, `[1]=src1`, … |
-| `0x1004`          | pending[63:32]        | `[0]=src32`, … |
-| `0x1000 + 4*w`    | pending word `w`      | (same packing) |
-| above `0x1000 + 4*ceil(NS/32)` | RAZ            | — |
-
-Writes are silently ignored — pending bits change only via the gateway
-(set by the source line) or by claim (cleared when a context claims).
-There is no software-clear path for a stuck pending bit; the only way
-to clear `pending[s]` is for an enabled context to claim it (or for the
-source line to drop and let the gateway re-evaluate after the next claim).
-
-### Enable window
-
-Per-context enable bits, packed 32 sources per word. Each context owns
-a 128-byte block. Bit 0 of word 0 (source 0) is RAZ/WI for every
-context.
-
-| Offset                            | Register                | Notes |
-|-----------------------------------|-------------------------|-------|
-| `0x2000 + 0x80*ctx + 4*w`         | enable[ctx][word w]     | `[0]=src(32w)`, etc. |
-| same offset, ctx > NUM_CONTEXTS-1 | RAZ/WI                  | — |
-| `0x2000 + 0x80*ctx + 4*(w >= ceil(NS/32))` | RAZ/WI         | — |
-
-Note: the spec defines a per-context enable bit even for source 0; we
-hard-tie it to 0 since no IRQ can ever arrive on source 0.
-
-### Target window
-
-Each context owns a 4 KB-strided block holding its threshold and its
-claim/complete register. Only the first 8 bytes are used; the rest of
-the 4 KB stride is RAZ/WI.
-
-| Offset                          | Register                       | Behaviour |
-|---------------------------------|--------------------------------|-----------|
-| `0x200000 + 0x1000*ctx + 0x0`   | `threshold[ctx]`               | RW, `PRIO_BITS`-wide. The arbiter ignores any source whose priority is `<= threshold`. Setting `threshold = max_priority` effectively masks all IRQs for that context. |
-| `0x200000 + 0x1000*ctx + 0x4`   | `claim_complete[ctx]`          | **Read = claim**: returns the ID of the highest-priority pending+enabled source (or 0 if none — the claim arbiter is threshold-independent per PLIC 1.0 Chapter 8), and on the same hclk edge sets `in_service[id]` and clears `pending[id]`. **Write = complete**: writing source ID `N` clears `in_service[N]`, allowing future gateway re-trigger. Writes with `N=0` or `N > NUM_SOURCES` are silently dropped. |
-| other offsets in stride         | RAZ/WI                         | — |
-
-> **Claim atomicity.** The claim read and the `in_service[id] ← 1` /
-> `pending[id] ← 0` updates happen on the **same hclk edge** as the
-> AHB data-phase read. There is no intermediate exposed state: the
-> next bus cycle observes both that the read returned the source ID
-> and that the source is no longer pending. Because AHB serialises
-> bus accesses, two contexts cannot claim simultaneously.
-
----
-
-## Gateway and arbitration
+Throughout the denied data phase the addressed sub-block is deselected:
+a denied write reaches no register, a denied claim read claims nothing,
+and a denied read returns `hrdata_o = 0`. An address phase held through
+the first ERROR cycle is captured in the second and then completes
+normally. An aRVern hart reports the ERROR response as a **resumable
+NMI** (`mncause = 0x80000003`, faulting address in `marv_eaddr`) — never
+as a synchronous access fault (`mcause` 5 and 7 come from the core's PMP
+checkers only) — so misbehaving firmware is put on notice instead of
+corrupting PLIC state silently.
 
 ### Level-triggered gateway
 
-Each source has two state bits in `plic_pending`:
+Each source `s` in `1..NUM_SOURCES` has two state bits in `plic_pending`:
 
-- `pending[s]` — set when the source line `irq_src_i[s]` rises and
-  `in_service[s] = 0`. Stays set until cleared.
-- `in_service[s]` — set on claim, cleared on complete.
-
-Concretely, for each source `s`:
+- `pending[s]` — set on any `hclk_i` edge at which `irq_src_i[s]` is
+  high and `in_service[s] = 0`; cleared only by a claim of `s`.
+- `in_service[s]` — set by a claim of `s`, cleared by an accepted
+  completion of `s`.
 
 ```
-pending[s]    <= pending[s]    ? (claim_pulse & claim_id==s ? 0 : 1)
-                              : (irq_src_i[s] & ~in_service[s]);
-in_service[s] <=    set on (claim_pulse    & claim_id   ==s)
-                  clear on (complete_pulse & complete_id==s);
+pending[s]    <= claim of s                 ? 0
+               : irq_src_i[s] & ~in_service[s] ? 1
+               :                              pending[s];
+in_service[s] <= claim of s                 ? 1
+               : accepted complete of s     ? 0
+               :                              in_service[s];
 ```
 
-This means:
+Consequences:
 
-- If a peripheral asserts and clears `irq_src_i[s]` in a single hclk
-  (a pulse), `pending[s]` latches and survives — firmware will still
-  see the IRQ.
-- If `irq_src_i[s]` stays high across the whole IRQ lifetime, after
-  complete clears `in_service[s]`, the next cycle re-sets
-  `pending[s]` and the gateway re-fires. This is the canonical
-  "level-triggered, re-trigger if still asserted" behaviour expected
-  by Linux PLIC drivers and most embedded peripherals.
+- A level held high across one rising edge of the free-running clock
+  (both edges synchronous to it, see
+  [Integration requirements](#integration-requirements)) is latched into
+  `pending[s]` and survives the line dropping — firmware still sees the
+  interrupt, and the handler has to discover that the device no longer
+  needs service (PLIC 1.0.0 §1.2).
+- While `in_service[s] = 1` the line is ignored. If it is still high
+  when the completion is accepted, `pending[s]` sets again on the next
+  edge and the source is delivered again — the specification's
+  level-triggered re-trigger rule (§1.2).
+- Every source is level-triggered; there is no edge-triggered mode.
 
-There is no edge-triggered mode in this revision of the IP — every
-source is level-triggered. If edge support is ever needed, a per-source
-mode register can be added without disturbing the layout (a 1-bit-per-source
-field hung off an unused offset).
+`irq_*_external_o` is combinational from the pending, enable, priority
+and threshold flops, with no path from `irq_src_i`: it asserts after the
+first `hclk_i` edge at which `irq_src_i[s]` is sampled high, and drops
+after the edge that completes the claim read (unless another source
+qualifies).
 
 ### Per-context arbiter
 
-`plic_target` runs **two parallel max-priority arbiters** in one
-combinational loop, each iterating sources high-to-low with `>=` so the
-lowest source ID overwrites a tie:
+`plic_target` selects over the sources twice; ties go to the lowest ID
+(PLIC 1.0.0 §1.4):
 
-- **Claim arbiter** — `pending & enable`. Threshold is **NOT** applied.
-  This drives the claim/complete read data (`0x4`) and the
-  `claim_source_id_o` pulse. Per PLIC 1.0.0 Chapter 8: *"The claim
-  operation is not affected by the setting of the priority threshold
-  register."*
-- **IRQ arbiter** — `pending & enable & (priority > threshold)`. Drives
-  `irq_o` to the hart. Per PLIC 1.0.0 Chapter 7: the PLIC masks
-  interrupts of priority less than or equal to threshold (strict `>`).
+- **Claim arbiter** — the highest-priority source of `pending & enable &
+  priority != 0`, threshold **not** applied. Drives the claim read data and
+  the claim pulse.
+  Chapter 8: *"the claim operation is not affected by the setting of the
+  priority threshold register."*
+- **Notification** — whether any source of the same set also has
+  `priority > threshold`. Drives `irq_*_external_o`. Chapter 7: the
+  threshold masks every source of priority less than or equal to it
+  (strict `>`).
 
-A source with `priority = 0` never qualifies either arbiter — priorities
-are unsigned, threshold is bounded `[0, 2^PRIO_BITS-1]`, and the strict
-`>` comparison excludes priority 0 even at `threshold=0`. Source 0
-additionally has its priority hard-tied 0 by `plic_priority`. If no
-source qualifies the claim arbiter, the read returns `0` (per Chapter 8).
+A source at priority 0 is neither claimable nor notified, at any threshold.
+Source 0 is excluded by construction (priority, pending and enable all
+hard-tied 0). When nothing qualifies the claim arbiter, a claim read
+returns 0.
 
-For the default case (1 hart × 2 contexts × 31 sources × 3-bit priority),
-each per-context block synthesises into a couple of dozen LUTs. Area
-scales linearly with `NUM_CONTEXTS × NUM_SOURCES`; at ~1000 sources we
-would want a pipelined or time-multiplexed arbiter, but that's well
-beyond the IP's target deployment envelope.
+Area scales with `NUM_CONTEXTS × NUM_SOURCES`. The claim arbiter is a
+binary tree of priority compares, so its logic depth grows with
+`log2(NUM_SOURCES + 1)`, not with the source count; the interrupt output of
+each context is an OR-reduce over the sources that qualify above its
+threshold. `hclk_en_o` is a separate OR-reduce over the sources.
 
 ### Claim / Complete handshake
 
 A read of `claim_complete[ctx]`:
 
-1. The AHB data-phase delivers `top_source_id_o[ctx]` (the **claim**
-   arbiter's choice — threshold-independent) zero-extended to 32 bits as
-   the read data.
-2. On the same hclk edge, `claim_pulse_o[ctx]` asserts with
-   `claim_source_id_o[ctx] = top_source_id_o[ctx]`.
-3. `plic_pending` consumes that pulse on the same edge:
+1. The data phase returns the claim arbiter's winner for `ctx`,
+   zero-extended to 32 bits (0 if none).
+2. On the clock edge completing the data phase, `plic_target` pulses the
+   claim with that ID and `plic_pending` applies it:
    `in_service[id] ← 1`, `pending[id] ← 0`.
 
-A write of `claim_complete[ctx]` with hwdata `N`:
+A write of `claim_complete[ctx]` with data `N`:
 
-1. `plic_target` checks that `N` is in range (`1 ≤ N ≤ NUM_SOURCES`)
-   **and** that `enable_i[ctx][N] = 1` — i.e. the source is currently
-   enabled for this context. Per PLIC 1.0.0 Chapter 9: *"If the
+1. `plic_target` accepts the completion only when the whole word `N` is
+   in `1..NUM_SOURCES` **and** `enable[ctx][N] = 1`. Chapter 9: *"If the
    completion ID does not match an interrupt source that is currently
    enabled for the target, the completion is silently ignored."*
-2. If both checks pass, `complete_pulse_o[ctx]` asserts with
-   `complete_source_id_o[ctx] = N[10:0]`. Otherwise the pulse is
-   suppressed at the target — no state change reaches `plic_pending`.
-3. `plic_pending` consumes accepted pulses: `in_service[N] ← 0`.
+2. An accepted completion pulses `plic_pending`: `in_service[N] ← 0` on
+   the edge that ends the write's data phase. Anything else changes no
+   state and completes with OKAY.
+3. If source `N`'s line is still high, `pending[N]` sets on the following
+   edge. A claim in the transfer immediately after the completion does not
+   see it yet (it returns another source, or 0); a claim one cycle later
+   does.
 
-Per-context claim/complete pulses are OR-reduced at the top before
-feeding `plic_pending`. This is safe because AHB serialises bus
-accesses — at most one context's claim or complete pulse can be live
-on any given cycle.
+Per-context claim and complete pulses are OR-combined at the top before
+`plic_pending`. The combine is lossless: the target decode is an equality
+on the context field of the address, so exactly one `plic_target` is
+selected per transfer, and AHB-Lite carries one data phase at a time.
+Two contexts that both want the same source are therefore serialised by
+the bus: the first claim wins, the second read returns the next
+pending-and-enabled source for that context, or 0 if there is none.
 
-> **Belt and braces.** The top-level address decode at
-> `ahb_plic.v` makes `in_target[ctx]` a strict equality on the per-context
-> address bits (`dph_addr[20:12] == ctx[8:0]`), so at most one
-> `plic_target` instance can have `reg_sel_i = 1` in any cycle by
-> construction — independent of AHB serialisation. The OR-reduce at the
-> top is therefore always a lossless combine, even under hypothetical
-> bus misbehaviour (e.g. a multi-master fabric that incorrectly issued
-> two transactions in the same cycle).
+> **Multicast and the shared in-service bit.** A source may be enabled
+> for several contexts (the specification's multicast, §1.3): all of them
+> are notified, the first claim wins, the others find the source no
+> longer pending. The single `in_service[s]` bit per source is the
+> specification's per-source gateway state. The hazard is a context
+> completing an ID it did not receive from its own claim — the
+> specification does not check this (Chapter 9) — which clears
+> `in_service[s]` under the claimer's handler and lets the gateway
+> re-pend the source while it is still being serviced. **A handler must
+> complete only the ID its own claim returned.** For M-supervises-S
+> delegation, the simplest arrangement is to enable the source only on
+> the S-context and deliver it through `mideleg.SEI=1`.
 
-> **Don't disable a source mid-handler.** Per the spec, a completion
-> targeting a source not currently enabled for the context is silently
-> ignored (Chapter 9). The PLIC implements this faithfully — but the
-> side-effect is that if firmware clears `enable[ctx][N]` between the
-> claim and the complete of source `N`, the complete pulse is dropped
-> and **`in_service[N]` stays high**. Source `N` then cannot trigger
-> another interrupt until `in_service[N]` is cleared, and the only way
-> to clear it is via an accepted complete — which requires re-enabling
-> the source first. Recommended pattern: **always complete before
-> disabling**. If a handler must disable a source it has just claimed,
-> it must either (a) complete first, then disable, or (b) re-enable
-> long enough to issue a complete before disabling permanently.
+> **Complete before disabling.** A completion for a source that is not
+> enabled for the completing context is ignored (Chapter 9). If a handler
+> clears `enable[ctx][N]` between its claim and its completion of `N`,
+> the completion is dropped and `in_service[N]` stays set: source `N`
+> cannot interrupt again until an accepted completion clears it, which
+> requires re-enabling it first. Complete first, then disable.
 
-> **Single-source ownership across contexts.** The PLIC maintains a
-> **single `in_service[s]` bit per source**, shared across all
-> contexts (not a per-`(context, source)` array). This is
-> spec-conformant — PLIC 1.0 Chapter 1.2 states that "at most one
-> interrupt request per interrupt source can be pending in the PLIC
-> core at any time" — but it relies on firmware to preserve the
-> invariant. **Do not enable the same source for multiple contexts of
-> the same hart** (e.g. both M-context and S-context). For
-> M-supervises-S delegation, enable the source only on the S-context
-> and use the core's `mideleg.SEI=1` to route the S-mode external
-> interrupt; the M-context never sees the source in that pattern. A
-> misconfiguration that enables a source for two contexts can produce
-> a sequence where ctx1's complete clears `in_service[s]` while
-> ctx0's handler is still mid-flight, after which the gateway can
-> re-assert `pending[s]` from the still-asserted source line and
-> deliver a duplicate notification while ctx0 still owns the source.
-> Same rule applies across harts: each external source should have
-> exactly one notification owner.
+---
+
+## Integration
+
+### Port summary
+
+| Direction | Port                 | Width           | Description |
+|-----------|----------------------|-----------------|-------------|
+| in        | `hclk_i`             | 1               | AHB clock; gated by the SoC from `hclk_en_o`, see [Clock gating](#clock-gating) |
+| in        | `hresetn_i`          | 1               | Active-low reset. Assertion is asynchronous with `ASYNC_RST_EN=1` (default) and synchronous with `ASYNC_RST_EN=0`; the de-assert edge is synchronised to `hclk_i` by the integrator |
+| in        | `hsel_i`             | 1               | AHB-Lite subordinate select |
+| in        | `haddr_i`            | 22              | Byte address inside the 4 MB window (the fabric decodes the upper bits); `[1:0]` ignored |
+| in        | `hwrite_i`           | 1               | Write enable |
+| in        | `hsize_i`            | 3               | Transfer size; anything but word (`3'b010`) is denied, see [Access control](#access-control) |
+| in        | `htrans_i`           | 2               | Transfer type. NONSEQ and SEQ start an access; IDLE and BUSY receive a zero-wait OKAY and have no effect, whatever `hsize_i` / `hprot_i` carry. `HBURST` is not an input |
+| in        | `hprot_i`            | 4               | AHB-Lite protection. `[1]`: 1 = privileged, 0 = unprivileged; the other bits are ignored. Used only with `PRIV_CHECK_EN=1` |
+| in        | `hsmode_i`           | 1               | aRVern privilege sideband (`HAUSER`). With `hprot_i[1]=1`: 0 = M-mode, 1 = S-mode; don't-care otherwise. Used only with `PRIV_CHECK_EN=1` |
+| in        | `hready_i`           | 1               | Bus ready in (the fabric's `HREADY`), see [Integration requirements](#integration-requirements) |
+| in        | `hwdata_i`           | 32              | Write data |
+| out       | `hrdata_o`           | 32              | Read data; 0 on a denied read |
+| out       | `hreadyout_o`        | 1               | `1` except in the first cycle of an ERROR response; `1` during reset |
+| out       | `hresp_o`            | 1               | `1` for both cycles of the ERROR response of a denied access |
+| in        | `irq_src_i`          | `NUM_SOURCES+1` | Interrupt source levels; bit `[s]` is source `s`, bit `[0]` is reserved and ignored |
+| out       | `irq_m_external_o`   | `NUM_HARTS`     | M-mode external interrupt per hart (core `irq_m_external_i`) |
+| out       | `irq_s_external_o`   | `NUM_HARTS`     | S-mode external interrupt per hart (core `irq_s_external_i`); tied `0` when `SU_MODE_EN=0` |
+| out       | `hclk_en_o`          | 1               | Combinational clock-gate request: high when the IP needs an `hclk_i` edge. Drives the SoC-side ICG |
+
+`hresp_o`, `hreadyout_o` and `hrdata_o` are functions of flops only;
+there is no combinational path from an AHB input to an AHB output.
+
+### Clock gating
+
+`hclk_en_o` is a **combinational** request meaning "the PLIC needs an
+`hclk_i` edge". It is high whenever an `hclk_i`-domain flop may have to
+update:
+
+- an address phase is selecting this subordinate
+  (`hsel_i & hready_i & htrans_i[1]`) — the data-phase state is about to
+  be captured;
+- a data phase is in flight — register writes, the claim and complete
+  pulses and the ERROR response all advance in that cycle;
+- the gateway is about to set a pending bit: some source `s` in
+  `1..NUM_SOURCES` has `irq_src_i[s] & ~in_service[s] & ~pending[s]`.
+  This is the only transition that is not bus-driven, and the reason the
+  wake path must stay outside the gated domain (see
+  [Integration requirements](#integration-requirements)).
+
+It is low in every stable state, including `pending = 1` with the source
+still asserted (the arbiters that drive `irq_*_external_o` are
+combinational from flops and need no clock) and `in_service = 1` waiting
+for the completion write (which raises `hclk_en_o` through the
+address-phase term when the master presents it). A source rising into a
+quiescent PLIC raises `hclk_en_o` combinationally; the next free-running
+edge latches `pending` and `irq_*_external_o` asserts. The core wakes from
+WFI on its own live sampling of that pin; **`hclk_en_o` opens only the
+PLIC's gate**, not the core's.
+
+Wire `hclk_en_o` into a latch-based ICG cell whose enable is captured by
+a latch transparent while the clock is low. Do **not** AND `hclk_en_o`
+with the free-running clock combinationally: `hclk_en_o` is decoded from
+address and state and may glitch inside a cycle. The family clock-gate
+cell [`arv_cgate`](../../arv_primitives/rtl/verilog/arv_cgate.v) is
+this structure; drive its `en_i` with `hclk_en_o | ~hresetn_i`. The
+bench (`bench/verilog/tb_ahb_plic.v`) models the same cell:
+
+```verilog
+// SoC-side ICG model (reference)
+reg hclk_en_latch;
+always @(free_clk or hclk_en_o or hresetn_i)
+    if (~free_clk)
+        hclk_en_latch <= hclk_en_o | ~hresetn_i;
+assign hclk_i = free_clk & hclk_en_latch;
+```
+
+> **The `| ~hresetn_i` term is mandatory when `ASYNC_RST_EN=0`**, and
+> harmless otherwise. In sync-reset mode the flops need clock edges to
+> reach their reset values, but `hclk_en_o` is built from those very
+> flops: a closed gate at power-up leaves the domain uninitialised and
+> `hreadyout_o` / `hresp_o` undefined during reset. Keeping the clock
+> running while reset is asserted is the integrator's job.
+
+Source 0 does not take part in the `hclk_en_o` OR-reduce (its priority,
+pending and enable are hard-tied 0); `irq_src_i[0]` may be tied to either
+level.
+
+### Integration requirements
+
+| Port / item | Rule | Consequence of ignoring it |
+|---|---|---|
+| `hresetn_i` | Active-low. Assertion is asynchronous with `ASYNC_RST_EN=1`, synchronous with `ASYNC_RST_EN=0` (the clock must then run while reset is asserted — see the ICG note). Synchronise the de-assert edge to `hclk_i` at the integration boundary; the IP has no reset synchroniser. | Metastability on the first capture edge after release. |
+| `hclk_i` / ICG | Gate from `hclk_en_o` with a latch-based ICG (`arv_cgate`) whose enable is `hclk_en_o \| ~hresetn_i`. A free-running `hclk_i` is equally correct. | A combinational AND exposes `hclk_en_o` glitches to clock pins; a gate closed during reset never initialises a sync-reset build. |
+| `irq_src_i` | Each bit is a level synchronous to the free-running clock from which `hclk_i` is gated (same edge). Any flop or synchroniser feeding it — [`arv_synchronizer`](../../arv_primitives/rtl/verilog/arv_synchronizer.v) for a foreign-clock source — is clocked by that free-running clock (or an always-on clock), **never by the PLIC's gated `hclk_i`**: the wake path `pin → irq_src_i → hclk_en_o` must lie entirely outside the gated domain. The gateway samples the pin directly; there is no synchroniser in the IP. | A synchroniser on the gated `hclk_i` never clocks while `hclk_en_o = 0`, so an asynchronous source can never wake a gated PLIC; the interrupt is lost until unrelated traffic reopens the clock. |
+| `hsmode_i` | Connect to the fabric's `HAUSER` sideband (`data_hsmode_o` of an aRVern core). Without such a sideband, tie `hsmode_i = 0`. | With `hsmode_i = 0` every privileged access decodes as M: the S-mode rows of the access policy degrade to the M-mode rows and only U-mode denial remains. A debugger through the core's SBA presents as M (`hprot[1]=1, hsmode=0`) and is never locked out. |
+| `hready_i` | Connect to the fabric's `HREADY` (the AND of all subordinates' `HREADYOUT`, as the interconnect builds it), which during the PLIC's own data phase equals its `hreadyout_o`. Never tie it high. | Tied high, a transfer issued while another subordinate stalls the bus is taken as accepted. The claim is a level on the held data phase: a fabric that lowers `hready_i` during the PLIC's data phase — off-spec for AHB-Lite — would claim a new source on every extended cycle and return only the last ID. The IP does not guard against this. |
+| `hsize_i`, `htrans_i`, `haddr_i[1:0]` | Word transfers only; NONSEQ and SEQ both start an access, so word bursts are accepted beat by beat; IDLE and BUSY are ignored; `haddr_i[1:0]` is not decoded. | A non-word beat gets the two-cycle ERROR; a misaligned word address aliases onto its containing word. |
+| `irq_src_i[0]` | Reserved; tie to `0` or `1`. | None — the bit is ignored. |
+| Parameters | Keep every parameter inside the table's range; only simulation and lint check it. | Synthesis silently builds a broken netlist (see [Design parameters](#design-parameters)). |
+
+---
+
+## Verification
+
+```bash
+cd sim/rtl_sim/run
+./run <test>              # one test, bench defaults (SU_MODE_EN=1)
+./run_all                 # the default-config test list, bench defaults
+./run_all -sweep          # every test x every config + coverage gate
+./run_lint                # Verilator lint, RTL defaults
+./run_lint -sweep         # Verilator lint, all RTL configs
+
+cd ../../../lint/vc_static
+./run_vclint -rtl_sweep   # VC Static signoff lint, all RTL configs
+
+cd ../../synthesis/synopsys
+./run_syn -rtl_sweep      # DC synthesis + DFT DRC, all RTL configs
+```
+
+The standalone bench `bench/verilog/tb_ahb_plic.v` drives the IP through
+an AHB-Lite BFM (`ahb_tasks.v`: word, halfword and byte transfers in
+M, S or U mode, blocking or pipelined) and a per-source `irq_src`
+driver, with the SoC-side ICG model of [Clock gating](#clock-gating).
+**The bench's own default build is `SU_MODE_EN=1`** (all six `PLIC_*`
+defines default to the "everything on" build so the S-contexts are
+exercised) while the RTL default is `SU_MODE_EN=0`; the `su0` sim
+configs cover the RTL default.
+
+### Scoreboard and coverage gate
+
+`bench/verilog/scoreboard.v` is an always-on reference model, compared
+against the DUT every cycle whatever stimulus runs; every mismatch fails
+the test:
+
+| Checker | Reference |
+|---|---|
+| **SB-EIP** (per context) | `irq_o` equals `OR_s(pending & enable & prio != 0 & prio > threshold)`. |
+| **SB-TOP** (per context) | The claim winner equals the highest-priority pending-and-enabled source, ties to the lowest ID, threshold-independent. |
+| **SB-GW** | Pending and in-service per source equal a gateway model driven only by `irq_src_i` and the claims and completions observed on the bus: a claim takes the ID the read returned, a completion counts only under the specification's rule (whole word in `1..NUM_SOURCES`, enabled for the completing context). |
+| **SB-X** | No DUT output is X after reset. |
+
+`bench/verilog/cover_monitor.v` raises a sticky bin the first time each
+condition is seen (interrupt outputs high, `hclk_en_o` in both states,
+ERROR and size-denial, pending / in-service / claim / complete activity,
+priority-0 and threshold masking, a source above 31) and prints
+`COVERAGE HIT: <bin>` at the end of every run. `./run_all -sweep` unions
+the hits across all configs and **fails the sweep** when a bin in
+`sim_configs.py:MANDATORY_COVER_BINS` was never hit.
+
+### Configurations
+
+Two tables drive the sweeps. `sim/rtl_sim/bin/sim_configs.py` sets the
+bench defines and the test list of each simulation config:
+
+| Sim config     | Defines (bench)                          | Tests |
+|----------------|------------------------------------------|-------|
+| `default`      | bench defaults (`SU_MODE_EN=1`)          | the 27 default tests |
+| `nh2`          | `NUM_HARTS=2`                            | `priority_rdwr`, `enable_rdwr`, `unmapped_access`, `multihart_routing`, `priv_contexts`, `context_walk`, `addr_walk` |
+| `nh4`          | `NUM_HARTS=4`                            | `priority_rdwr`, `enable_rdwr`, `unmapped_access`, `multihart_routing`, `priv_contexts`, `context_walk`, `addr_walk` |
+| `su0`          | `SU_MODE_EN=0`                           | `priority_rdwr`, `pending_gateway`, `threshold_claim`, `unmapped_access`, `su_disabled`, `priv_contexts`, `context_walk`, `addr_walk`, `enable_priority_dynamics` |
+| `nh2_su0`      | `NUM_HARTS=2 SU_MODE_EN=0`               | `priority_rdwr`, `unmapped_access`, `su_disabled`, `priv_contexts`, `context_walk`, `addr_walk` |
+| `ns63_pb4`     | `NUM_SOURCES=63 PRIO_BITS=4`             | `pending_gateway`, `threshold_claim`, `arbiter_tiebreak`, `m_s_routing`, `unmapped_access`, `source_walk`, `threshold_extremes`, `addr_walk`, `context_walk`, `pair_contests`, `priority_multiword`, `enable_multiword`, `pending_multiword` |
+| `ns127_pb7`    | `NUM_SOURCES=127 PRIO_BITS=7`            | `unmapped_access`, `source_walk`, `threshold_extremes`, `addr_walk`, `threshold_claim`, `arbiter_tiebreak`, `m_s_routing`, `priority_zero`, `threshold_boundary`, `complete_invalid_id`, `priv_contexts`, `random_irq`, `context_walk`, `pair_contests`, `priority_multiword`, `enable_multiword`, `pending_multiword` |
+| `ns40_pb1`     | `NUM_SOURCES=40 PRIO_BITS=1`             | `source_walk`, `threshold_extremes`, `addr_walk`, `unmapped_access`, `pending_gateway`, `arbiter_tiebreak`, `m_s_routing`, `priority_zero`, `complete_invalid_id`, `random_irq`, `reset_values`, `pair_contests`, `priority_multiword`, `enable_multiword`, `pending_multiword` |
+| `nh4_ns63_pb4` | `NUM_HARTS=4 NUM_SOURCES=63 PRIO_BITS=4` | `context_walk`, `unmapped_access`, `addr_walk`, `priv_contexts` |
+| `priv_off`     | `PRIV_CHECK_EN=0`                        | `priority_rdwr`, `enable_rdwr`, `unmapped_access`, `priv_check_off`, `size_check`, `addr_walk` |
+| `sync_rst`     | `ASYNC_RST_EN=0`                         | the default tests except `source_walk`, `threshold_extremes`, `enable_priority_dynamics`, `pair_contests` (23) |
+
+`sim/rtl_sim/bin/rtl_configs.py` is the RTL parameter set shared by
+`./run_lint -sweep`, `run_vclint -rtl_sweep` and `run_syn -rtl_sweep`
+(`-rtl_config N|name` builds one of them; `-list_configs` numbers them),
+so a config cannot mean one thing to one flow and another to the next.
+Its `default` is the RTL default (`SU_MODE_EN=0`), unlike the bench's:
+
+| RTL config           | Parameter overrides                             |
+|----------------------|-------------------------------------------------|
+| `default`            | (RTL defaults)                                  |
+| `nh1_su1`            | `SU_MODE_EN=1`                                  |
+| `nh2_su1`            | `NUM_HARTS=2 SU_MODE_EN=1`                      |
+| `nh2_su0`            | `NUM_HARTS=2 SU_MODE_EN=0`                      |
+| `nh4_su1`            | `NUM_HARTS=4 SU_MODE_EN=1`                      |
+| `ns63_pb4`           | `NUM_SOURCES=63 PRIO_BITS=4 SU_MODE_EN=1`       |
+| `ns127_pb7`          | `NUM_SOURCES=127 PRIO_BITS=7 SU_MODE_EN=1`      |
+| `nh4_su1_ns63_pb4`   | `NUM_HARTS=4 NUM_SOURCES=63 PRIO_BITS=4 SU_MODE_EN=1` |
+| `ns40_pb1`           | `NUM_SOURCES=40 PRIO_BITS=1 SU_MODE_EN=1`       |
+| `sync_rst`           | `ASYNC_RST_EN=0 SU_MODE_EN=1`                   |
+
+### Tests
+
+One file per test in `sim/rtl_sim/src/`; tests that do not apply to a
+build report **SKIP**, a test with no verdict reports **INCONCLUSIVE**
+and fails the sweep.
+
+| Test | Pins | Sim configs |
+|---|---|---|
+| `priority_rdwr` | Priority register file: only `PRIO_BITS` LSBs stored, source 0 RAZ/WI, write-data truncation. | `default`, `nh2`, `nh4`, `su0`, `nh2_su0`, `priv_off`, `sync_rst` |
+| `priority_multiword` | Priority slots for sources 32 and above (offset `0x80+`), truncation, `priority[0]` RAZ/WI, RAZ above `NUM_SOURCES`. | `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+| `priority_zero` | A pending-and-enabled source at priority 0 neither interrupts nor wins a claim, at threshold 0. | `default`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
+| `pending_gateway` | Gateway latches a source until claimed, several sources accumulate in one word, writes to the pending window are ignored. | `default`, `su0`, `ns63_pb4`, `ns40_pb1`, `sync_rst` |
+| `pending_multiword` | Sources 32 and above latch at the right positions of pending word 1; word 0 stays clear. | `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+| `pending_gated_wake` | With the bus idle and `hclk_i` gated off, a source rising re-opens the clock through `hclk_en_o`, the pending bit sets and the interrupt fires. | `default`, `sync_rst` |
+| `enable_rdwr` | Enable bits per (context, word): source-0 bit hard-tied 0, contexts are independent storage, out-of-range words and contexts RAZ. | `default`, `nh2`, `nh4`, `priv_off`, `sync_rst` |
+| `enable_multiword` | Enable words 0 and 1 hold distinct patterns, source-0 bit 0, a second context is independent; masked to `NUM_SOURCES`. | `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+| `threshold_claim` | Arbiter ordering, threshold masking at and below, claim clears pending on the same edge, complete with the level still high re-triggers, with the level released does not. | `default`, `su0`, `ns63_pb4`, `ns127_pb7`, `sync_rst` |
+| `threshold_boundary` | Strict `>`: `prio == threshold` masks, `prio == threshold + 1` passes; the claim winner is returned while masked. | `default`, `ns127_pb7`, `sync_rst` |
+| `claim_threshold_independent` | The claim read returns the highest pending-and-enabled source even when the threshold masks it (Chapter 8). | `default`, `sync_rst` |
+| `complete_invalid_id` | Completions of a source not enabled for the context, of ID 0, above `NUM_SOURCES`, or with bits above `[10]` set are ignored and leave a genuine in-service bit untouched (Chapter 9). | `default`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
+| `arbiter_tiebreak` | Three sources at one priority are served lowest ID first. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
+| `m_s_routing` | ctx 0 drives `irq_m_external_o[0]`, ctx 1 drives `irq_s_external_o[0]`; a claim by one context removes the source from the other's view until completion. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
+| `multihart_routing` | Per-hart routing of M (and S) contexts; a claim by one hart drops the other hart's view. | `nh2`, `nh4` |
+| `su_disabled` | `SU_MODE_EN=0`: context indices `>= NUM_HARTS` RAZ/WI, `irq_s_external_o` tied 0, an M-context still routes end to end. | `su0`, `nh2_su0` |
+| `unmapped_access` | Every hole RAZ/WI with OKAY: between the enable and target windows, priority above `NUM_SOURCES`, enable and pending words above `NUM_SOURCES` (word 32 does not alias onto word 0), target strides beyond `NUM_CONTEXTS`. | all 11 |
+| `priv_check` | `PRIV_CHECK_EN=1` policy: denied S/U accesses return ERROR and leave state untouched, M reads back the intact pattern. | `default`, `sync_rst` |
+| `priv_check_off` | `PRIV_CHECK_EN=0`: the same accesses succeed. | `priv_off` |
+| `priv_contexts` | Policy on every context's enable block and threshold in every build: M allowed, S allowed only on an S-context, U denied; denied writes change nothing. | `default`, `nh2`, `nh4`, `su0`, `nh2_su0`, `ns127_pb7`, `nh4_ns63_pb4`, `sync_rst` |
+| `size_check` | Byte and halfword transfers to a valid register are denied with ERROR; a word access to the same register is the control. | `default`, `priv_off`, `sync_rst` |
+| `ahb_error_p2` | Cycle-accurate ERROR shape: `{hresp, hreadyout}` = `1,0` then `1,1`, then `hresp = 0`. | `default`, `sync_rst` |
+| `error_hold` | An address phase held through an ERROR is taken in its second cycle and completes normally; two denied transfers back to back give two full ERROR responses; a denied read returns 0 in both cycles; a denied claim read neither claims nor clears the pending source. | `default`, `sync_rst` |
+| `bus_pipelined` | Pipelined back-to-back writes and reads, a NONSEQ+SEQ word burst accepted beat by beat, IDLE and BUSY carrying a bad size or U-mode (zero-wait OKAY, no effect), `hsize` `3'b011` and `3'b000` on a word address (ERROR). | `default`, `sync_rst` |
+| `reset_values` | Every register reads 0 before any write; no interrupt output is asserted at boot. | `default`, `ns40_pb1`, `sync_rst` |
+| `random_irq` | Constrained-random priorities, enables, threshold and source vector with interleaved claim/complete on the claimed ID; correctness comes from the scoreboard, a fresh seed per run. | `default`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
+| `source_walk` | Every source end to end through ctx 0 (priority read-back, output, its own pending bit only, claim, complete); ascending and descending priority ladders with every line high claimed to exhaustion in the arbiter's order; every priority and enable bit set then cleared; source 0 never pends. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+| `context_walk` | Every context in turn: its whole enable block written all-ones (implemented bits read back, reserved words RAZ) then all-zeros; sources 1, 2, 4, …, 64, `NUM_SOURCES` and `NUM_SOURCES` with one bit cleared each alone on the context: exactly its mapped output rises, its claim returns the ID, a complete through a context not enabling the source is ignored (no re-pend while the line is high), the complete through its own context is accepted. | `nh2`, `nh4`, `su0`, `nh2_su0`, `ns63_pb4`, `ns127_pb7`, `nh4_ns63_pb4` |
+| `addr_walk` | Walking one and walking zero over `haddr[21:2]` plus reserved target, priority, pending and enable offsets, each classified from the address map and checked from M, S and U mode against the access table; `hprot` `4'hF` / `4'hD` decode as `4'h2` / `4'h0`; `hsize` `3'b100`..`3'b111` denied; a misaligned word address lands on its containing word. | all 11 |
+| `reset_in_operation` | A line high across reset release pends on the first edge after it; reset with live priorities, enables, thresholds, pending and in-service state gives `hreadyout=1`, `hresp=0`, outputs 0, and every register at 0 after release with the high lines re-pending; source 0 toggling pends nothing and leaves `hclk_en_o` low. | `default`, `sync_rst` |
+| `threshold_extremes` | Priority `2^PRIO_BITS-1` under threshold `2^PRIO_BITS-1` is masked but still claimed, under `2^PRIO_BITS-2` it interrupts (sources 1, 64 and `NUM_SOURCES`); all-ones writes to every threshold and a priority read back `2^PRIO_BITS-1`. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+| `enable_priority_dynamics` | Clearing the enable or zeroing the priority of a pending source drops the output and the claim while the pending bit stays; a complete after the enable is cleared is dropped, the source stays in service until re-enabled and completed. | `default`, `su0` |
+| `claim_complete_pipelined` | Back-to-back transfers: claim via ctx 0 then ctx 1 (the second gets the next source or 0), complete with the line high then two back-to-back claims (0, then the re-pended source one cycle later), a word claim held behind a size-denied claim read taken exactly once, complete then enable-clear (complete accepted). | `default`, `sync_rst` |
+| `pair_contests` | Every adjacent pair (2k, 2k+1), k ≥ 1, alone on ctx 0: even ID higher, odd ID higher, then equal (lowest ID wins); winner then loser claimed and completed. With `PRIO_BITS=1` the loser of an unequal contest is at priority 0 and is not claimed until raised to 1. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
+
+### Signoff gates
+
+| Gate | Criterion |
+|---|---|
+| Simulation sweep (`./run_all -sweep`) | 0 failed, 0 inconclusive, every mandatory coverage bin hit |
+| Verilator lint (`./run_lint -sweep`) | 0 warnings, all RTL configs |
+| VC Static lint (`run_vclint -rtl_sweep`) | 0 errors, 0 warnings, **0 stale waivers**, all RTL configs |
+| Synthesis (`run_syn -rtl_sweep`) | 0 timing violations, **0 unconstrained endpoints**, 0 DFT violations, all RTL configs |
+
+### Lint conventions
+
+The RTL is clean under `verilator --lint-only -Wall -Wpedantic` with an
+empty waiver file (`sim/rtl_sim/run/waivers.vlt`). Deliberately unused
+signals (`htrans_i[0]`, the cacheable / bufferable / data bits of
+`hprot_i`, byte-lane address bits, the source-0 inputs) are routed to sink
+wires with an `_unused` suffix, so one tool-agnostic regex waives the
+residual warning in any lint tool. Keep the suffix when adding RTL.
+VC Static (`lint/vc_static/`, policy in `rules.tcl`, design waivers in
+`waivers.tcl`) reports *stale* waivers — ones that matched nothing — and
+a non-zero count fails the run. Declare every net before its first use:
+Verilator and Icarus accept a forward reference, VC Static and Design
+Compiler reject it.
+
+### Core-level tests
+
+The aRVern core testbench
+([`tb_arvern.v`](https://github.com/Arvern-Silicon/arvern/blob/main/bench/verilog/tb_arvern.v))
+instantiates the PLIC as a 4 MB subordinate at `0x0C00_0000` and runs
+end-to-end firmware tests against the core ↔ PLIC interface
+([`sim/rtl_sim/src/trap_irq_plic_*`](https://github.com/Arvern-Silicon/arvern/tree/main/sim/rtl_sim/src)):
+`basic` (configure, claim, complete, higher priority first), `drain`
+(a 4-deep pending set delivered in priority order), `threshold` (strict
+`>`), `seip` (delegated S-mode external interrupt through ctx 1),
+`priv_violation` and `size_violation` (the ERROR response reported as the
+resumable NMI), and `wfi_wake` (a source rising wakes the core from WFI).
+
+---
+
+## Synthesis
+
+A Synopsys Design Compiler flow lives under `synthesis/synopsys/`,
+following the same pattern as the other `arvern-ips` blocks, with a
+`LIB_FLAVOR` selector for the technology setup:
+
+```bash
+cd synthesis/synopsys
+./run_syn                          # default flavor (lib_default), RTL defaults
+./run_syn -lib <flavor>            # a specific library flavor
+./run_syn -lib <flavor> -i         # interactive (keep dc_shell open after the run)
+./run_syn -rtl_config <N|name>     # one config from sim/rtl_sim/bin/rtl_configs.py
+./run_syn -rtl_sweep               # every config; one summary line each
+./run_syn -list_configs            # number the configs
+```
+
+`libraries/setup_lib_default.tcl` is intentionally absent, because it
+names your technology: create it from the tracked template before the
+first run (`cp libraries/setup_lib_example.tcl
+libraries/setup_lib_default.tcl`, then edit). Any other
+`setup_<flavor>.tcl` in the same directory is selected with
+`-lib <flavor>`; an unknown flavor prints the list found. Foundry `.db`
+files are typically symlinked under `libraries/` so one setup serves
+several IPs (see [`README.md`](../../README.md#synthesis)).
+
+The boundary I/O delays follow the register-bank subordinate convention:
+20 % of the clock period on the AHB inputs and `irq_src_i`, 70 % on the
+AHB outputs, 75 % on the per-hart interrupt outputs and `hclk_en_o`
+(they drive the core's trap-priority encoder and the SoC ICG). The
+`hsel_i` / `hready_i` / `htrans_i` / `irq_src_i` → `hclk_en_o`
+feed-throughs form their own path group.
+
+Outputs land in `results/`; a `-rtl_config` build also snapshots its
+reports to `results_sweep/<label>/`, and `-rtl_sweep` writes
+`results_sweep/sweep_summary.log` (timing violations, unconstrained
+endpoints and DFT violations per config):
+
+| File                                     | Description |
+|------------------------------------------|-------------|
+| `ahb_plic.gate.v`, `ahb_plic.ddc`        | Gate-level netlist and DDC database |
+| `ahb_plic.spf`                           | DFT scan test protocol |
+| `report.area`, `report.full_area`        | Area summary (incl. NAND2-equivalent) and hierarchy |
+| `report.timing`, `report.check_timing_pre` | Timing check; unconstrained endpoints |
+| `report.paths.*`, `report.full_paths.*`  | Worst-path end-point and full-path reports (max / min) |
+| `report.constraints`                     | Constraint compliance |
+| `report.dft_*`                           | DFT DRC, coverage estimate, scan-chain configuration |
+| `report.refs`                            | Cell references |
+| `synthesis.log`                          | Full dc_shell transcript |
+
+`run_check_reset_style` runs PrimeTime (`check_reset_style_pt.tcl`) on
+the gate-level netlist to confirm every flop carries the reset style the
+build selected.
 
 ---
 
@@ -546,103 +740,29 @@ on any given cycle.
 
 ```
 ahb_plic/
+├── ahb_plic.core                     FuseSoC manifest (RTL fileset + lint target)
 ├── rtl/verilog/
-│   ├── ahb_plic.v                    Top-level AHB-Lite slave + sub-instances
+│   ├── ahb_plic.v                    Top: AHB-Lite subordinate, decode, access policy, hclk_en_o
 │   ├── plic_priority.v               Per-source priority register file
 │   ├── plic_pending.v                Pending + in_service flops, level gateway
 │   ├── plic_enable.v                 Per-(context, source) enable matrix
-│   ├── plic_target.v                 Per-context threshold + arbiter + claim
-│   └── filelist.f                    RTL source list (consumed by both sim & synth)
+│   ├── plic_target.v                 Per-context threshold + arbiters + claim/complete
+│   └── filelist.f                    RTL source list (sim, lint and synthesis)
+├── bench/verilog/
+│   ├── tb_ahb_plic.v                 Testbench: parameters, ICG model, DUT
+│   ├── ahb_tasks.v                   AHB-Lite BFM (M/S/U, blocking or pipelined)
+│   ├── scoreboard.v                  SB-EIP / SB-TOP / SB-GW / SB-X reference models
+│   ├── cover_monitor.v               Functional-coverage bins
+│   └── submit.f                      Simulation file list
 ├── sim/rtl_sim/
-│   ├── bin/                          Sim runner + log parsers
-│   └── run/                          Run wrappers (run_lint, waivers.vlt)
+│   ├── src/                          One <test>.v per test
+│   ├── bin/                          runsim, run_sweep.py, sim_configs.py, rtl_configs.py, lint sweep
+│   └── run/                          run, run_all, run_lint, waivers.vlt
+├── lint/vc_static/                   VC Static flow: run_vclint, rules.tcl, waivers.tcl
+├── synthesis/synopsys/               DC flow: run_syn, constraints.tcl, libraries/
 └── doc/
-    ├── ahb_plic.md                   This document
-    └── img/                          (reserved for future block diagrams)
+    └── ahb_plic.md                   This document
 ```
-
----
-
-## Verification
-
-The IP ships with a standalone Verilog testbench at
-`bench/verilog/tb_ahb_plic.v` driven by an AHB-Lite BFM. The sim runner
-exposes per-test and sweep modes; both lint and sim sweeps cover the
-parameter space (single / multi-hart, SU_MODE_EN on/off, varying
-`NUM_SOURCES` and `PRIO_BITS`, and `PRIV_CHECK_EN` on/off).
-
-```bash
-cd sim/rtl_sim/run
-./run_lint                # single-config lint (Verilator)
-./run_lint -sweep         # lint sweep across the supported parameter grid
-./run <test_name>         # run one sim test under the default config
-./run_all -sweep          # full sim sweep -- all tests x all configs
-```
-
-Coverage at a glance (full list in `sim/rtl_sim/src/`):
-
-| Area exercised                                    | Tests |
-|---------------------------------------------------|-------|
-| AHB register read / write, RAZ/WI of unmapped offsets | `priority_rdwr`, `priority_multiword`, `pending_multiword`, `enable_rdwr`, `enable_multiword`, `unmapped_access` |
-| Gateway latching, claim/complete handshake        | `pending_gateway`, `threshold_claim`, `complete_invalid_id` |
-| Threshold gating (strict `>`) and claim independence | `threshold_claim`, `claim_threshold_independent` |
-| Multi-source priority arbitration + tie-break     | `arbiter_tiebreak` |
-| Multi-context routing under `SU_MODE_EN` and multi-hart | `m_s_routing`, `multihart_routing`, `su_disabled` |
-| Privilege filter — denial for S→M-ctx accesses    | `priv_check` |
-| `PRIV_CHECK_EN=0` regression                      | `priv_check_off` |
-
-In addition, the aRVern integration testbench at
-`arvern/bench/verilog/tb_arvern.v` instantiates the PLIC as a 4 MB
-slave at `0x0C00_0000` (SiFive / QEMU-virt convention) and runs
-end-to-end firmware tests against the core ↔ PLIC interface — these
-live in `arvern/sim/rtl_sim/src/trap_irq_plic_*.{s,v}` and cover
-config + claim/complete, threshold gating, delegated SEI via ctx 1,
-privilege-filter AHB ERROR, sub-word-size AHB ERROR, WFI wake via a
-source rise, and a 4-deep pending-set drain in priority order.
-
----
-
-## Synthesis
-
-A Synopsys Design Compiler flow lives under `synthesis/synopsys/` and
-follows the same pattern as the other `arvern-ips` blocks, with a
-`LIB_FLAVOR` selector for technology setup.
-
-```bash
-cd synthesis/synopsys
-./run_syn                          # default flavor (lib_default)
-./run_syn -lib <flavor>            # synthesise with a specific library flavor
-./run_syn -lib <flavor> -i         # interactive (keep dc_shell open after run)
-./run_syn_d -lib <flavor>          # same, inside the dockerised DC image
-```
-
-Available `<flavor>` values are derived from the files present in
-`synthesis/synopsys/libraries/setup_*.tcl` — running `./run_syn` with an
-unknown flavor prints the full list. Out of the box the flow ships with
-a `lib_default` flavor and a `lib_example` template; users add their own
-technology by dropping a new `setup_<flavor>.tcl` next to the others.
-Foundry `.db` files are referenced through symlinks under
-`synthesis/synopsys/libraries/` so the same setup files can be shared
-across multiple IPs (see `arvern-ips/README.md`).
-
-The clock-period default in `constraints.tcl` is `15 ns (66 MHz)`. The
-boundary I/O delays follow the standard register-bank slave convention
-(`20%` of clock period on AHB inputs, `70%` on AHB outputs, `75%` on the
-per-hart IRQ outputs and `hclk_en_o` since they drive the core's trap
-priority encoder / the SoC ICG).
-
-Outputs land in `synthesis/synopsys/results/`:
-
-| File                              | Description                                     |
-|-----------------------------------|-------------------------------------------------|
-| `ahb_plic.gate.v`                 | Gate-level netlist                              |
-| `ahb_plic.ddc`                    | Synopsys DDC database                           |
-| `ahb_plic.spf`                    | DFT scan test protocol (when DFT enabled)       |
-| `report.area`, `report.full_area` | Area summary (incl. NAND2-equivalent)           |
-| `report.timing`, `report.paths.*` | Timing and worst-path reports                   |
-| `report.constraints`              | Constraint compliance                           |
-| `report.dft_*`                    | DFT DRC, coverage, scan-chain configuration     |
-| `synthesis.log`                   | Full dc_shell transcript                        |
 
 ---
 

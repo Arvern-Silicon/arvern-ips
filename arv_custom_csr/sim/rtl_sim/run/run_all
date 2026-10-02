@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "${1:-}" = "-cov" ]; then
+    exec ../bin/runcov
+fi
+
 # Disable waveform dumping
 SIMULATION_NODUMP=1
 export SIMULATION_NODUMP
@@ -35,22 +39,30 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     LOG_DIR=./log/$ii
     mkdir -p $LOG_DIR
      
-    # Custom CSR test patterns (asynchronous reset - default ASYNC_RST_EN=1)
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr.log
-    ../bin/runsim simple_rdonly               | tee $LOG_DIR/simple_rdonly.log
-    ../bin/runsim supervisor_rdwr             | tee $LOG_DIR/supervisor_rdwr.log
-    ../bin/runsim wen_zero                    | tee $LOG_DIR/wen_zero.log
+    # Fixed-address tests: written for the bench's own configuration
+    # (4/2/4/2/4/2), in both reset styles.
+    FIXED_TESTS="simple_rdwr simple_rdonly supervisor_rdwr wen_zero"
+    for build in ":" "-sync:-D ASYNC_RST_EN=0"; do
+        suffix="${build%%:*}"
+        SIM_EXTRA_DEFINES="${build#*:}"
+        export SIM_EXTRA_DEFINES
+        for t in $FIXED_TESTS; do
+            ../bin/runsim $t                  | tee $LOG_DIR/$t$suffix.log
+        done
+    done
 
-    # Re-run the same test list with synchronous reset (ASYNC_RST_EN=0),
-    # mirroring the arvern core's ASYNC_RST_EN config coverage.
-    SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
-    export SIM_EXTRA_DEFINES
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr-sync.log
-    ../bin/runsim simple_rdonly               | tee $LOG_DIR/simple_rdonly-sync.log
-    ../bin/runsim supervisor_rdwr             | tee $LOG_DIR/supervisor_rdwr-sync.log
-    ../bin/runsim wen_zero                    | tee $LOG_DIR/wen_zero-sync.log
+    # Configuration-independent tests: every config of ../bin/rtl_configs.py,
+    # parameters not overridden by a config taking the RTL default. Logs are
+    # <test>-<config>.log so ../bin/parse_results counts each build.
+    SWEEP_TESTS="bank_map_sweep random_access reset_values register_walk"
+    python3 ../bin/rtl_configs_defines.py | while IFS=: read -r label defines; do
+        SIM_EXTRA_DEFINES="$defines"
+        export SIM_EXTRA_DEFINES
+        for t in $SWEEP_TESTS; do
+            ../bin/runsim $t                  | tee $LOG_DIR/$t-$label.log
+        done
+    done
     unset SIM_EXTRA_DEFINES
-
 
     # Report regression results
     ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log

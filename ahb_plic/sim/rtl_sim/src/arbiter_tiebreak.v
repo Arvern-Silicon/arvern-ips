@@ -17,6 +17,10 @@
 //                      claimed source on the next cycle (otherwise the next
 //                      claim would return the same lowest-ID winner again,
 //                      not the next-up source).
+//                      The first and last source IDs are then checked at the
+//                      edges of the arbiter: NUM_SOURCES alone must raise the
+//                      interrupt and win the claim, and a tie between source 1
+//                      and NUM_SOURCES must go to source 1.
 //----------------------------------------------------------------------------
 
 // Base of the PLIC slave window (matches hsel decode in the TB).
@@ -25,6 +29,8 @@
 `define ENABLE_BASE   32'h00002000
 `define TARGET_BASE   32'h00200000
 `define TARGET_STRIDE 32'h00001000
+
+integer ii;
 
 initial
    begin
@@ -125,6 +131,42 @@ initial
       //---------------------------------------------------------------
       //------------------ END OF TEST --------------------------------
       //---------------------------------------------------------------
+      $display(" ===============================================");
+      $display("|    EDGES: SOURCE NUM_SOURCES, TIE WITH SRC 1  |");
+      $display(" ===============================================");
+
+      // Only source 1 and source NUM_SOURCES enabled on ctx 0, same priority.
+      ahb_write(1, MACHINE, `PLIC_BASE + `PRIO_BASE + 32'h4, 32'd1, 2, OK);
+      ahb_write(1, MACHINE, `PLIC_BASE + `PRIO_BASE + 4*NUM_SOURCES, 32'd1, 2, OK);
+      for (ii = 0; ii <= NUM_SOURCES/32; ii = ii + 1)
+         ahb_write(1, MACHINE, `PLIC_BASE + `ENABLE_BASE + 4*ii,
+                   ((ii == 0) ? 32'h2 : 32'h0) | ((ii == NUM_SOURCES/32) ? (32'h1 << (NUM_SOURCES % 32)) : 32'h0), 2, OK);
+      ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE, 32'd0, 2, OK);
+
+      // NUM_SOURCES alone: interrupt raised, claim returns it.
+      tb_ahb_plic.irq_src[NUM_SOURCES] = 1'b1;
+      repeat(3) @(posedge free_clk);
+      if (tb_ahb_plic.irq_m_external[0] !== 1'b1) begin
+         $display("ERROR: source NUM_SOURCES (%0d) alone did not raise irq_m_external[0] %t ns", NUM_SOURCES, $time);
+         error = error + 1;
+      end
+      ahb_read (1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, NUM_SOURCES, 2, 1, OK);
+      tb_ahb_plic.irq_src[NUM_SOURCES] = 1'b0;
+      ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, NUM_SOURCES, 2, OK);
+
+      // Tie between the first and the last source: the lower ID wins.
+      if (NUM_SOURCES > 1) begin
+         tb_ahb_plic.irq_src[1]           = 1'b1;
+         tb_ahb_plic.irq_src[NUM_SOURCES] = 1'b1;
+         repeat(3) @(posedge free_clk);
+         ahb_read (1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'd1, 2, 1, OK);
+         tb_ahb_plic.irq_src[1] = 1'b0;
+         ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'd1, 2, OK);
+         ahb_read (1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, NUM_SOURCES, 2, 1, OK);
+         tb_ahb_plic.irq_src[NUM_SOURCES] = 1'b0;
+         ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, NUM_SOURCES, 2, OK);
+      end
+
       repeat(21) @(posedge free_clk);
       $display("");
       stimulus_done = 1;

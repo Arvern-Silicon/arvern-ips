@@ -16,7 +16,7 @@
 //=============================================================================
 // Shared common library (arv_ipdff reset primitive, synchronizers, etc.)
 //=============================================================================
--f ../../../arv_common/rtl/verilog/filelist.f
+-f ../../../arv_primitives/rtl/verilog/filelist.f
 
 //=============================================================================
 // Module specific modules

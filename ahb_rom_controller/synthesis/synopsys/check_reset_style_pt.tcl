@@ -19,10 +19,10 @@
 #
 #   Run:   pt_shell -f check_reset_style_pt.tcl
 #
-#   The expected reset style is auto-detected by grepping the RTL top's
-#   ASYNC_RST_EN parameter default (the IP synthesis flow overrides no params,
-#   so the RTL default is the value the netlist was built with): default
-#   nonzero -> async, 0 -> sync. An EXPECT env var overrides; if detection
+#   The expected reset style is auto-detected from the configuration the netlist
+#   was built with: RTL_PARAM_ASYNC_RST_EN in ./rtl_params.tcl when the last
+#   `run_syn -rtl_config` set one, otherwise the RTL top's ASYNC_RST_EN default
+#   (nonzero -> async, 0 -> sync). An EXPECT env var overrides; if detection
 #   fails it falls back to async.
 #----------------------------------------------------------------------------
 
@@ -38,19 +38,26 @@ proc check_reset_style {} {
 
     # Expected reset style, in priority order:
     #   1. explicit EXPECT env var (manual override);
-    #   2. auto-detect from the RTL top's ASYNC_RST_EN parameter default (the value
-    #      the netlist was synthesized with: nonzero -> async, 0 -> sync); else
-    #   3. default to async.
+    #   2. RTL_PARAM_ASYNC_RST_EN from ./rtl_params.tcl -- the config the last
+    #      `run_syn -rtl_config` elaborated (run_syn deletes the file before every
+    #      run, so it always describes the netlist in ./results);
+    #   3. the RTL top's ASYNC_RST_EN parameter default (a run without a config);
+    #   4. async.
     set expect ""
     set expect_src "default"
     if {[info exists ::env(EXPECT)]} {
         set expect     $::env(EXPECT)
         set expect_src "EXPECT env override"
-    } else {
-        # Auto-detect from the RTL top's ASYNC_RST_EN parameter DEFAULT. The IP
-        # synthesis flow elaborates with default parameters (it overrides none),
-        # so the RTL default is exactly what the netlist was built with:
-        # default nonzero -> async, 0 -> sync.
+    } elseif {[file exists ./rtl_params.tcl]} {
+        source ./rtl_params.tcl
+    }
+    if {($expect eq "") && [info exists RTL_PARAM_ASYNC_RST_EN]} {
+        set expect     [expr {$RTL_PARAM_ASYNC_RST_EN ? "async" : "sync"}]
+        set expect_src "./rtl_params.tcl (ASYNC_RST_EN=$RTL_PARAM_ASYNC_RST_EN)"
+    }
+    if {$expect eq ""} {
+        # No config override: the netlist was built with the RTL defaults, so read
+        # the top's ASYNC_RST_EN default: nonzero -> async, 0 -> sync.
         set rtl_top "../../rtl/verilog/${DESIGN_NAME}.v"
         if {[file exists $rtl_top]} {
             set fh [open $rtl_top r]

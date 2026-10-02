@@ -26,6 +26,13 @@
 //                                must equal the highest-priority pending&enabled
 //                                source, ties broken by lowest ID.
 //                      Global:
+//                        SB-GW   pending / in-service per source must equal a
+//                                gateway model driven only by irq_src_i and the
+//                                claims / completes seen on the bus: a claim
+//                                takes the ID the claim read returned, a
+//                                complete counts only when the spec's rule
+//                                admits it (ID 1..NUM_SOURCES as a whole word,
+//                                enabled for the completing context).
 //                        SB-X    no DUT output may be X after reset.
 //
 //                      These reference models duplicate the spec, not the RTL
@@ -67,8 +74,8 @@ for (sb_gc = 0; sb_gc < NUM_CONTEXTS; sb_gc = sb_gc + 1) begin : G_SB_CTX
       top_ref  = 11'h0;
       top_prio = {PRIO_BITS{1'b0}};
 
-      // Iterate high-to-low with >= so the lowest source ID wins a tie,
-      // exactly mirroring plic_target's arbiter loop.
+      // Iterate high-to-low with >= so the lowest source ID wins a tie (the
+      // spec's rule; plic_target implements it as a compare tree).
       for (s = NUM_SOURCES; s >= 1; s = s - 1) begin
          pr         = dut.priority_flat[PRIO_BITS*s +: PRIO_BITS];
          qual_claim = dut.pending_flat[s] &
@@ -102,6 +109,93 @@ end
 endgenerate
 
 //----------------------------------------------------------------------------
+// SB-GW : gateway / claim / complete reference model.
+//----------------------------------------------------------------------------
+reg  [NUM_SOURCES:1] gw_pend;
+reg  [NUM_SOURCES:1] gw_insvc;
+reg                  gw_dph;          // a transfer's data phase is in progress
+reg           [21:0] gw_addr;
+reg                  gw_write;
+reg           [10:0] gw_ctx;
+reg                  gw_is_claim;
+reg                  gw_claim_ev;
+reg                  gw_compl_ev;
+reg           [10:0] gw_claim_id;
+reg           [10:0] gw_compl_id;
+integer              gw_s;
+
+// The bus signals are sampled mid-cycle, where they are stable: stimulus changes them
+// on the rising edge, and reading them there would race the DUT. irq_src_i reaches
+// the DUT 1 ns after the stimulus drives it, so it never moves on a clock edge and is
+// read on the DUT's own edge -- a source raised while the clock is gated wakes it for
+// a single edge, which a mid-cycle copy would miss.
+reg                  gw_hready, gw_hsel, gw_hwrite, gw_hreadyout, gw_hresp;
+reg            [1:0] gw_htrans;
+reg           [21:0] gw_haddr;
+reg           [31:0] gw_hwdata, gw_hrdata;
+
+always @(negedge free_clk) begin
+   gw_hready    <= hready;
+   gw_hsel      <= hsel;
+   gw_htrans    <= htrans;
+   gw_haddr     <= haddr[21:0];
+   gw_hwrite    <= hwrite;
+   gw_hwdata    <= hwdata;
+   gw_hrdata    <= hrdata;
+   gw_hreadyout <= hreadyout;
+   gw_hresp     <= hresp;
+end
+
+always @(posedge hclk or negedge hresetn) begin
+   if (!hresetn) begin
+      gw_pend  <= {NUM_SOURCES{1'b0}};
+      gw_insvc <= {NUM_SOURCES{1'b0}};
+      gw_dph   <= 1'b0;
+      gw_addr  <= 22'h0;
+      gw_write <= 1'b0;
+   end else begin
+      // Claim / complete registers: 0x200000 + 0x1000*ctx + 0x4.
+      gw_ctx      = gw_addr[21:12] - 10'h200;
+      gw_is_claim = (gw_addr[21:12] >= 10'h200) && (gw_ctx < NUM_CONTEXTS) &&
+                    (gw_addr[11:0] == 12'h004);
+      // Only transfers that complete with OKAY count (a denied one is ERROR).
+      gw_claim_ev = gw_dph & ~gw_write & gw_is_claim & gw_hreadyout & ~gw_hresp &
+                    (gw_hrdata[10:0] != 11'h0);
+      gw_claim_id = gw_hrdata[10:0];
+      gw_compl_id = gw_hwdata[10:0];
+      gw_compl_ev = gw_dph & gw_write & gw_is_claim & gw_hreadyout & ~gw_hresp &
+                    (gw_hwdata[31:11] == 21'h0) && (gw_compl_id != 11'h0) &&
+                    (gw_compl_id <= NUM_SOURCES) &&
+                    dut.enable_flat[(NUM_SOURCES+1)*gw_ctx + gw_compl_id];
+      for (gw_s = 1; gw_s <= NUM_SOURCES; gw_s = gw_s + 1) begin
+         if (gw_claim_ev && (gw_claim_id == gw_s)) begin
+            gw_pend[gw_s]  <= 1'b0;
+            gw_insvc[gw_s] <= 1'b1;
+         end else begin
+            if (~gw_insvc[gw_s] & irq_src_i[gw_s]) gw_pend[gw_s] <= 1'b1;
+            if (gw_compl_ev && (gw_compl_id == gw_s)) gw_insvc[gw_s] <= 1'b0;
+         end
+      end
+      // Address phase bookkeeping; held while hready is low.
+      if (gw_hready) begin
+         gw_dph   <= gw_hsel & gw_htrans[1];
+         gw_addr  <= gw_haddr;
+         gw_write <= gw_hwrite;
+      end
+   end
+end
+
+always @(negedge free_clk) if (sb_active && hresetn) begin
+   sb_checks = sb_checks + 1;
+   if ((gw_pend !== dut.pending_flat[NUM_SOURCES:1]) ||
+       (gw_insvc !== dut.in_service_flat[NUM_SOURCES:1])) begin
+      $display("ERROR: SCOREBOARD SB-GW -- model pending=%h in_service=%h but DUT pending=%h in_service=%h %t ns",
+               gw_pend, gw_insvc, dut.pending_flat[NUM_SOURCES:1], dut.in_service_flat[NUM_SOURCES:1], $time);
+      error = error + 1;
+   end
+end
+
+//----------------------------------------------------------------------------
 // SB-X : no DUT output may be X once the monitor is armed.
 //----------------------------------------------------------------------------
 always @(negedge free_clk) if (sb_active) begin
@@ -121,7 +215,7 @@ end
 //----------------------------------------------------------------------------
 task scoreboard_report;
    begin
-      $display("SCOREBOARD: %0d reference-model checks executed (SB-EIP/SB-TOP per ctx, SB-X)", sb_checks);
+      $display("SCOREBOARD: %0d reference-model checks executed (SB-EIP/SB-TOP per ctx, SB-GW, SB-X)", sb_checks);
       if (sb_checks == 0) begin
          $display("ERROR: SCOREBOARD never executed a check -- monitor was not armed %t ns", $time);
          error = error + 1;

@@ -1,0 +1,15 @@
+{signal: [
+  {name: 'tdo_o (status field)', wave: 'zzzz8.zzzzz35z',
+   data: ['busy','ok','data']},
+  {},
+  {name: 'dm_inflight  (internal)', wave: '01111100000000'},
+  {name: 'sticky_err   (internal)', wave: '2...8....2....',
+   data: ['none','busy','none']},
+  {},
+  {name: 'phase', wave: '5.4.8.7.3.x6.x',
+   data: ['launch read','RTI idle (too few)','Capture-DR too early -> BUSY','op completes','dmireset','re-read -> ok']}
+],
+  head: {text: 'Read-back-too-early -> BUSY (sticky); dmireset clears it and the re-read returns the original data'},
+  foot: {text: 'Capturing while the op is in flight reports busy and latches sticky_err; dtmcs.dmireset clears it, then the read completes with success.'},
+  config: {hscale: 2}
+}

@@ -1,0 +1,12 @@
+{signal: [
+  {name: 'uart_rx_i', wave: '10000000011', node: '.a.......b.'},
+  {},
+  {name: 'field',     wave: 'x3222222245', data: ['start','d0','d1','d2','d3','d4','d5','d6','d7','stop']}
+],
+  edge: ['a<->b 8 bit-times low = measured window'],
+  head: {text: 'Auto-baud: the host sends one 0x80 char; the DTM measures its low period'},
+  foot: {text: ['tspan',
+    '0x80 (LSB-first) = start + d0..d6 low (8 bit-times) then d7 high.',
+    ['tspan', {x: 440, dy: 14}, 'baud_div = round(measured_cycles / 8) = one bit period; RX and TX then use it.']]},
+  config: {hscale: 2}
+}

@@ -14,9 +14,9 @@
 //                      per-hart comparators back-to-back with staggered
 //                      targets relative to a single t_now snapshot, then
 //                      polls irq_m_timer_o in sequence to verify they fire
-//                      in the programmed order. Probes mtime_shadow via the
-//                      LF counter (no hard-coded MTIME address - MTIME_LO
-//                      offset shifts with NUM_HARTS).
+//                      in the programmed order. Reads MTIME at its fixed
+//                      offset (0x7FF8 in the MTIMER window, independent of
+//                      NUM_HARTS) and probes the bench's 64-bit snapshot.
 //                      Requires NUM_HARTS >= 2. Caps tested harts at 4 when
 //                      NUM_HARTS > 4 to keep runtime bounded.
 //----------------------------------------------------------------------------
@@ -25,9 +25,9 @@ localparam TESTED   = (NUM_HARTS > 4) ? 4 : NUM_HARTS;
 localparam OFFSET_0 = 64'd40;   // LF ticks ahead of t_now for hart 0
 localparam OFFSET_S = 64'd40;   // additional LF tick spacing between harts
 
-// MTIME_LO offset depends on NUM_HARTS (it lives just above the per-hart
-// MTIMECMP pairs at 0x4000 + 8*NUM_HARTS).
-wire [31:0] mtime_lo_addr = 32'h00404000 + (32'h00000008 * NUM_HARTS);
+// MTIME_LO sits at a fixed offset, 0x7FF8 in the MTIMER window (0x4000), for
+// every NUM_HARTS.
+wire [31:0] mtime_lo_addr = 32'h0040BFF8;
 wire [31:0] mtime_hi_addr = mtime_lo_addr + 32'h4;
 
 reg  [63:0] t_now;
@@ -55,12 +55,46 @@ initial
          ahb_write(1, MACHINE, 32'h00404000 + (32'h8 * hh), 32'hFFFFFFFF, 2, OK);
       end
 
-      // Let all MTIMECMP CDC handshakes settle on the LF side.
+      // Each hart's MTIMECMP must be its own storage, not hart 0's aliased.
+      // Give every tested hart a distinct pattern and read it back before any
+      // of them is armed, so a decode that ignores the hart index shows up as a
+      // read-back mismatch rather than as a missing interrupt much later.
+      for (hh = 0; hh < TESTED; hh = hh + 1) begin
+         ahb_write(1, MACHINE, 32'h00404000 + (32'h8 * hh), 32'hA5A50000 + hh, 2, OK);
+         ahb_write(1, MACHINE, 32'h00404004 + (32'h8 * hh), 32'h5A5A0000 + hh, 2, OK);
+      end
+      for (hh = 0; hh < TESTED; hh = hh + 1) begin
+         ahb_read(1, MACHINE, 32'h00404000 + (32'h8 * hh), 32'hA5A50000 + hh, 2, 1, OK);
+         ahb_read(1, MACHINE, 32'h00404004 + (32'h8 * hh), 32'h5A5A0000 + hh, 2, 1, OK);
+      end
+      $display("PASS:  per-hart MTIMECMP read-back distinct for %0d harts %t ns", TESTED, $time);
+
+      // Just above the implemented MTIMECMP bank the window is still MTIMER, so
+      // the offset is reserved RAZ/WI -- not an alias of the last hart's pair.
+      ahb_write(1, MACHINE, 32'h00404000 + (32'h8 * NUM_HARTS), 32'hDEADBEEF, 2, OK);
+      ahb_read (1, MACHINE, 32'h00404000 + (32'h8 * NUM_HARTS), 32'h00000000, 2, 1, OK);
+      ahb_read (1, MACHINE, 32'h00404004 + (32'h8 * NUM_HARTS), 32'h00000000, 2, 1, OK);
+      // The dropped write must not have aliased into any implemented pair. Check
+      // the ends of the range that was actually populated (TESTED may be less
+      // than NUM_HARTS), since a truncated index would land on one of them.
+      ahb_read (1, MACHINE, 32'h00404000, 32'hA5A50000, 2, 1, OK);
+      ahb_read (1, MACHINE, 32'h00404000 + (32'h8 * (TESTED-1)),
+                            32'hA5A50000 + (TESTED-1), 2, 1, OK);
+      $display("PASS:  top-of-bank offset (0x%h) is RAZ/WI and aliased into no implemented pair %t ns",
+               32'h00404000 + (32'h8 * NUM_HARTS), $time);
+
+      // Re-park everything before the timed sweep below.
+      for (hh = 0; hh < TESTED; hh = hh + 1) begin
+         ahb_write(1, MACHINE, 32'h00404004 + (32'h8 * hh), 32'hFFFFFFFF, 2, OK);
+         ahb_write(1, MACHINE, 32'h00404000 + (32'h8 * hh), 32'hFFFFFFFF, 2, OK);
+      end
+
+      // Let all MTIMECMP writes settle on the LF side.
       repeat(60) @(posedge free_clk);
 
-      // Capture a single t_now via an AHB MTIME_LO read - this kicks off
-      // the read CDC roundtrip and updates the hclk-domain mtime_shadow
-      // register with a fresh 64-bit snapshot. We then sample mtime_shadow
+      // Capture a single t_now via an AHB MTIME_LO read - this latches a
+      // fresh 64-bit snapshot into the hclk-domain MTIME shadow (mirrored by
+      // the bench's mtime_shadow_ahb_sim). We then sample the snapshot
       // directly because hrdata returns to 0 after the AHB task ends.
       $display("INFO:  MTIME_LO addr = 0x%h (NUM_HARTS=%0d)", mtime_lo_addr, NUM_HARTS);
       ahb_read(1, MACHINE, mtime_lo_addr, 32'h00000000, 2, 0, OK);
@@ -84,7 +118,7 @@ initial
          ahb_write(1, MACHINE, 32'h00404004 + (32'h8 * hh), target[hh][63:32], 2, OK);
       end
 
-      // Wait for the MTIMECMP write CDC handshakes to commit on the LF side
+      // Wait for the MTIMECMP writes to reach the LF side
       // before MTIME catches up to the earliest target.
       repeat(40) @(posedge free_clk);
 

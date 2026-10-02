@@ -52,7 +52,7 @@ localparam                  MEM_ADDRW    = $clog2(MEM_SIZE)-2; // Address width 
 // AHB CLOCK & RESET
 //======================================
 input  wire                 hclk_i;       // module clock (from the AHB clock domain)
-input  wire                 hresetn_i;    // active-low async reset (sync-deassert required at IP boundary)
+input  wire                 hresetn_i;    // active-low reset, style per ASYNC_RST_EN (sync de-assert required at IP boundary)
 output wire                 hclk_en_o;    // clock-gate enable; must drive an external ICG cell
 
 // AHB INTERFACE
@@ -61,12 +61,12 @@ input  wire [MEM_ADDRW+1:0] haddr_i;      // AHB byte address
 input  wire                 hready_i;     // bus ready in (from the interconnect)
 input  wire           [2:0] hsize_i;      // transfer size (unused — ROM returns the full 32-bit word)
 input  wire           [1:0] htrans_i;     // transfer type (NONSEQ/SEQ start an access; IDLE/BUSY skip)
-input  wire          [31:0] hwdata_i;     // write data (silently ignored — ROM is read-only)
-input  wire                 hwrite_i;     // write enable (writes are silently dropped)
-input  wire                 hsel_i;       // slave select
+input  wire          [31:0] hwdata_i;     // write data (ignored — ROM is read-only; the transfer is answered with ERROR)
+input  wire                 hwrite_i;     // write enable; a write is answered with a two-cycle AHB ERROR and reaches no state
+input  wire                 hsel_i;       // Subordinate select (HSELx)
 output wire          [31:0] hrdata_o;     // read data (combinational, gated by `rd_active`)
-output wire                 hreadyout_o;  // bus ready out (constant 1)
-output wire                 hresp_o;      // transfer response (constant 0)
+output wire                 hreadyout_o;  // bus ready out; low for the first of the two ERROR cycles, high otherwise
+output wire                 hresp_o;      // transfer response; high for both ERROR cycles, low otherwise
 
 // ROM INTERFACE
 //======================================
@@ -83,6 +83,12 @@ output wire                 rom_clk_o;    // ROM clock (direct pass-through of `
 wire  aph_valid;
 wire  aph_read;
 wire  rd_active;
+wire  aph_write;
+wire  wr_denied;
+wire  err_state;
+wire  err_state_nxt;
+wire  in_err_p1;
+wire  in_err_p2;
 
 
 //=============================================================================
@@ -91,10 +97,11 @@ wire  rd_active;
 
 assign aph_valid = hsel_i && hready_i && htrans_i[1];
 assign aph_read  = aph_valid && ~hwrite_i;
+assign aph_write = aph_valid &&  hwrite_i;
 
 
 //=============================================================================
-// 3)  STATE: single registered bit
+// 3)  STATE: read data phase, write ERROR (two cycles)
 //=============================================================================
 
 // rd_active: registered aph_read. Resets to 0; enabled every cycle (en_i=1).
@@ -103,14 +110,28 @@ arv_ipdff #(.WIDTH(1), .ARST_EN(ASYNC_RST_EN)) u_rd_active (
                                                             .d_i (aph_read),
                                                             .q_o (rd_active));
 
+// A write is answered with the AHB-Lite two-cycle ERROR
+arv_ipdff #(.WIDTH(1), .ARST_EN(ASYNC_RST_EN)) u_wr_denied (
+                       .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),
+                                                            .d_i (aph_write),
+                                                            .q_o (wr_denied));
+
+assign err_state_nxt = wr_denied & ~err_state;
+arv_ipdff #(.WIDTH(1), .ARST_EN(ASYNC_RST_EN)) u_err_state (
+                       .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),
+                                                            .d_i (err_state_nxt),
+                                                            .q_o (err_state));
+
+assign in_err_p1   = wr_denied & ~err_state;
+assign in_err_p2   =              err_state;
+
 
 //=============================================================================
 // 4)  OUTPUTS
 //=============================================================================
 
-// No error response
-assign hreadyout_o = 1'b1;
-assign hresp_o     = 1'b0;
+assign hreadyout_o = ~in_err_p1;
+assign hresp_o     =  in_err_p1 | in_err_p2;
 
 // Read data: valid one cycle after the read APH (rd_active is the registered aph_read)
 assign hrdata_o    = rom_dout_i & {32{rd_active}};
@@ -124,7 +145,7 @@ assign rom_cen_o   = ~aph_read;
 assign rom_clk_o   = hclk_i;
 
 // Clock enable for architectural clock-gating
-assign hclk_en_o   = aph_valid | rd_active;
+assign hclk_en_o   = aph_valid | rd_active | wr_denied | err_state;
 
 
 //=============================================================================
@@ -143,8 +164,6 @@ assign      hwdata_unused  = hwdata_i;
 wire  [2:0] hsize_unused;
 assign      hsize_unused   = hsize_i;
 
-wire        hwrite_unused;
-assign      hwrite_unused  = hwrite_i;
 
 
 //=============================================================================
@@ -155,7 +174,9 @@ assign      hwrite_unused  = hwrite_i;
 // or negative and produces illegal port slices. Upper bound: none — any
 // power-of-2 size up to the AHB address-space limit is valid; the practical
 // cap is whatever depth the attached ROM macro supports. A non-power-of-2
-// value would leave gaps in the address space and alias unmapped reads.
+// value sizes the ports for the next power of 2 and forwards the address
+// unchanged: reads between MEM_SIZE and that bound reach the macro out of
+// range, as the IP checks no address.
 // pragma translate_off
 generate
     if ((MEM_SIZE < 8) || ((MEM_SIZE & (MEM_SIZE - 1)) != 0)) begin : CHECK_MEM_SIZE

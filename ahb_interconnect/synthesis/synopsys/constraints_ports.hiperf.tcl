@@ -227,6 +227,7 @@ set_output_delay 0                             -min -clock "hclk"   [get_ports m
 set M_NX_HADDR_DLY        [expr ($CLOCK_PERIOD/100) * 20]
 set M_NX_HAUSER_DLY       [expr ($CLOCK_PERIOD/100) * 20]
 set M_NX_HBURST_DLY       [expr ($CLOCK_PERIOD/100) * 20]
+set M_NX_HMASTER_DLY      [expr ($CLOCK_PERIOD/100) * 20]
 set M_NX_HMASTLOCK_DLY    [expr ($CLOCK_PERIOD/100) * 20]
 set M_NX_HPROT_DLY        [expr ($CLOCK_PERIOD/100) * 20]
 set M_NX_HSIZE_DLY        [expr ($CLOCK_PERIOD/100) * 20]
@@ -248,6 +249,8 @@ set_input_delay 0                               -min -clock "hclk"   [get_ports 
 
 set_input_delay $M_NX_HBURST_DLY                -max -clock "hclk"   [get_ports m_nx_hburst_i]
 set_input_delay 0                               -min -clock "hclk"   [get_ports m_nx_hburst_i]
+set_input_delay $M_NX_HMASTER_DLY               -max -clock "hclk"   [get_ports m_nx_hmaster_i]
+set_input_delay 0                               -min -clock "hclk"   [get_ports m_nx_hmaster_i]
 
 set_input_delay $M_NX_HMASTLOCK_DLY             -max -clock "hclk"   [get_ports m_nx_hmastlock_i]
 set_input_delay 0                               -min -clock "hclk"   [get_ports m_nx_hmastlock_i]

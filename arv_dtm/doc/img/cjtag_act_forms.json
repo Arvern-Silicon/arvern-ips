@@ -1,0 +1,13 @@
+// Deliberately NOT WaveDrom groups: a group label is vertical text sized to the
+// group, and with one row per group the two labels overlap each other.
+{signal: [
+  {name: 'TMSC  (short)',    wave: '3.4.5.', data: ['OAC (4)','EC SHORT=1 (4)','Check Packet (4+)']},
+  {},
+  {name: 'TMSC  (standard)', wave: '3.4.6...5.', data: ['OAC (4)','EC SHORT=0 (4)','Global Register State (24)','Check Packet (4+)']}
+],
+  head: {text: 'Short vs standard (long) connect sequence - both are accepted'},
+  foot: {text: ['tspan',
+    'EC bit3 SHORT selects the form. Long form inserts the fixed 24-bit Global Register State (Tbl 11-4);',
+    ['tspan', {x: 400, dy: 14}, 'its SCNFMT field (bits 23:19) must be 9 = OScan1. A stock J-Link uses the STANDARD form by default.']]},
+  config: {hscale: 2}
+}

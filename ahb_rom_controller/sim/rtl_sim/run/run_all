@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "${1:-}" = "-cov" ]; then
+    exec ../bin/runcov
+fi
+
 # Disable waveform dumping
 SIMULATION_NODUMP=1
 export SIMULATION_NODUMP
@@ -35,22 +39,24 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     LOG_DIR=./log/$ii
     mkdir -p $LOG_DIR
      
-    # AHB ROM controller test patterns (asynchronous-reset config — default)
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr.log
-    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr.log
-    ../bin/runsim reset_check                 | tee $LOG_DIR/reset_check.log
-    ../bin/runsim address_sweep               | tee $LOG_DIR/address_sweep.log
-
-    # Re-run the same test list in the synchronous-reset config (ASYNC_RST_EN=0),
-    # mirroring the arvern core's reset-architecture coverage.
-    SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0"
-    export SIM_EXTRA_DEFINES
-    ../bin/runsim simple_rdwr                 | tee $LOG_DIR/simple_rdwr-sync.log
-    ../bin/runsim pipelined_rdwr              | tee $LOG_DIR/pipelined_rdwr-sync.log
-    ../bin/runsim reset_check                 | tee $LOG_DIR/reset_check-sync.log
-    ../bin/runsim address_sweep               | tee $LOG_DIR/address_sweep-sync.log
+    # Every test in the default build, in synchronous reset (ASYNC_RST_EN=0) and
+    # at a large ROM (MEM_SIZE=65536). The minimum ROM (MEM_SIZE=8, two words)
+    # runs the tests that stay inside two words. Logs are <test><suffix>.log so
+    # ../bin/parse_results counts each build separately.
+    TESTS="simple_rdwr pipelined_rdwr reset_check address_sweep write_error \
+           hready_stall error_pipelined busy_seq reset_midtransfer hsize_oversize"
+    SMALL_TESTS="address_sweep hready_stall error_pipelined busy_seq reset_midtransfer hsize_oversize"
+    for build in ":" "-sync:-D ASYNC_RST_EN=0" "-mem64k:-D MEM_SIZE=65536 -D VERY_LONG_TIMEOUT" "-mem8:-D MEM_SIZE=8"; do
+        suffix="${build%%:*}"
+        SIM_EXTRA_DEFINES="${build#*:}"
+        export SIM_EXTRA_DEFINES
+        list=$TESTS
+        [ "$suffix" = "-mem8" ] && list=$SMALL_TESTS
+        for t in $list; do
+            ../bin/runsim $t                  | tee $LOG_DIR/$t$suffix.log
+        done
+    done
     unset SIM_EXTRA_DEFINES
-
 
     # Report regression results
     ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log

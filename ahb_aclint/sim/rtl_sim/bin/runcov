@@ -1,0 +1,140 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# runcov -- Verilator line/branch/toggle coverage sweep over the ahb_aclint suite.
+#
+# Invoked by `run_all -cov`. Builds and runs every (configuration, test) pair of
+# bin/sim_configs.py SIM_CONFIGS -- the same list run_all -sweep runs -- under
+# Verilator (the regression itself uses Icarus, which has no coverage support),
+# merges the per-run databases and reports per-file coverage.
+#
+# One build per run: the stimulus file is `include`d into the bench and each
+# configuration is a set of bench defines, so every pair is a distinct
+# elaboration. Artefacts land in run/cov/ and are not tracked.
+#   runcov                    the whole SIM_CONFIGS sweep
+#   runcov <cfg:test> ...     just those pairs, into run/cov/single/<cfg_test>/
+#----------------------------------------------------------------------------
+set -u
+
+RUN_DIR="$(cd "$(dirname "$0")/../run" && pwd)"
+BIN="$(cd "$(dirname "$0")" && pwd)"
+IP="$(cd "$BIN/../../.." && pwd)"                       # .../ahb_aclint
+IPS="$(cd "$IP/.." && pwd)"
+BENCH="$IP/bench/verilog"
+RTL="$IP/rtl/verilog"
+SRC="$IP/sim/rtl_sim/src"
+
+# Worker: build and run ONE configuration:test pair in its own directory.
+#   runcov --one <cfg:test> <cov_dir>
+if [ "${1:-}" = "--one" ]; then
+    cfg="${2%%:*}"; t="${2#*:}"; COV="$3"
+    DEFS=$(python3 -c "
+import sys; sys.path.insert(0, '$BIN')
+from sim_configs import SIM_CONFIGS
+d = next(d for l, d, _ in SIM_CONFIGS if l == '$cfg')
+print(' '.join('+define+%s=%s' % kv for kv in sorted(d.items())))")
+    tag="${cfg}__${t}"
+    W="$COV/w_$tag"; rm -rf "$W"; mkdir -p "$W"; cd "$W" || exit 1
+    ln -sf "$SRC/$t.v" stimulus.v
+    # Instrument the DUT only (the ACLINT RTL and the arv_primitives cells it
+    # instantiates); COV_SCOPE=all instruments the whole bench.
+    SCOPE=""
+    if [ "${COV_SCOPE:-dut}" = "dut" ]; then
+        # arv_osc_ctrl is the bench's oscillator controller; ahb_aclint does not use it.
+        { echo "+incdir+$BENCH"; echo "+incdir+$W"; cat "$COV/files.txt"; } > scope_list.f
+        python3 "$BIN/cov_scope.py" cov_scope.vlt scope_list.f "$RTL" "$IPS/arv_primitives/rtl/verilog"
+        echo "coverage_off -file \"$IPS/arv_primitives/rtl/verilog/arv_osc_ctrl.v\"" >> cov_scope.vlt
+        SCOPE="cov_scope.vlt"
+    fi
+    # --x-initial unique + +verilator+rand+reset+1 start every flop at 1, so a reset
+    # net that only ever rises still gives the asynchronous resets a falling edge.
+    # cov_public.vlt makes the internal DUT nets the tests read public (see there).
+    # Corrected toggle macro for vectors wider than 64 bits (see cov_vlfix.py).
+    python3 "$BIN/cov_vlfix.py" "obj_$tag"
+    if ! verilator --binary --timing --coverage-line --coverage-toggle --coverage-max-width 65536 --x-initial unique \
+            -Wno-fatal -Wno-TIMESCALEMOD -Wno-LATCH -Wno-WIDTHEXPAND --quiet-exit \
+            -MAKEFLAGS OPT_FAST=-O0 -MAKEFLAGS OPT_SLOW=-O0 -MAKEFLAGS OPT_GLOBAL=-O0 \
+            +define+SEED=1 +define+NODUMP +define+ARV_COV_RESET_ZERO $DEFS \
+            +incdir+"$W" +incdir+"$BENCH" +incdir+"$RTL" \
+            $SCOPE "$BIN/cov_public.vlt" -f "$COV/files.txt" \
+            --top-module tb_ahb_aclint --Mdir "obj_$tag" -o "sim_$tag" > build.log 2>&1; then
+        { echo "=== $tag"; cat build.log; } >> "$COV/build.log"
+        printf '  %-44s BUILD-FAIL\n' "$tag"; exit 0
+    fi
+    rm -f coverage.dat
+    if timeout "${COV_TIMEOUT:-900}" "./obj_$tag/sim_$tag" +verilator+rand+reset+${COV_RAND_RESET:-1} > sim.log 2>&1 \
+       && grep -q "SIMULATION PASSED" sim.log; then
+        printf '  %-44s PASS\n' "$tag"
+    elif grep -q "SIMULATION SKIPPED" sim.log; then
+        printf '  %-44s SKIP\n' "$tag"
+    else
+        { echo "=== $tag"; grep -E "ERROR|FATAL|TIMEOUT" sim.log | head -20; tail -5 sim.log; } >> "$COV/fail.log"
+        printf '  %-44s FAIL/TIMEOUT\n' "$tag"
+    fi
+    [ -f coverage.dat ] && mv coverage.dat "$COV/dats/cov_$tag.dat"
+    cd "$COV" && rm -rf "$W"
+    exit 0
+fi
+
+if [ "$#" -gt 0 ]; then
+    SINGLE=1
+    COV="$RUN_DIR/cov/single/$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')"
+else
+    SINGLE=0
+    COV="$RUN_DIR/cov"
+fi
+
+if ! command -v verilator >/dev/null 2>&1; then
+    echo "ERROR: verilator not found -- coverage needs Verilator (>= 5.0, for --binary --timing)."
+    exit 1
+fi
+
+if [ -e "$COV/.lock" ] && kill -0 "$(cat "$COV/.lock" 2>/dev/null)" 2>/dev/null; then
+    echo "ERROR: a coverage sweep is already running (pid $(cat "$COV/.lock")); wait or kill it."
+    exit 1
+fi
+# Keep the previous sweep: COV_ARCHIVE=0 skips, COV_ARCHIVE_NAME=<label> names it.
+if [ $SINGLE -eq 0 ] && [ "${COV_ARCHIVE:-1}" != "0" ] && [ -d "$COV/dats" ]; then
+    ADEST="$RUN_DIR/cov_archive/$(date +%Y%m%d-%H%M%S)${COV_ARCHIVE_NAME:+_$COV_ARCHIVE_NAME}"
+    mkdir -p "$ADEST"
+    cp -R "$COV/dats" "$ADEST/" 2>/dev/null
+    cp "$COV/coverage.html" "$ADEST/" 2>/dev/null
+    echo "  previous coverage archived -> ${ADEST#$RUN_DIR/}"
+fi
+if [ $SINGLE -eq 1 ]; then
+    rm -rf "$COV"
+else
+    rm -rf "$COV/dats" "$COV/coverage.html" "$COV/files.txt" "$COV/build.log" "$COV/fail.log" \
+           "$COV/results.txt" "$COV"/w_*
+fi
+mkdir -p "$COV/dats"
+echo $$ > "$COV/.lock"
+trap 'rm -f "$COV/.lock"' EXIT
+cd "$COV" || exit 1
+
+# Bench + RTL file list, flattened from the bench submit file (absolute paths).
+python3 "$BIN/flatten_filelist.py" "$BENCH/submit.f" "$COV/submit_flat.f" >/dev/null
+grep -vE '^\s*//|^\s*$|^\+' "$COV/submit_flat.f" > files.txt
+
+if [ "$#" -gt 0 ]; then
+    PAIRS="$*"
+else
+    PAIRS=$(python3 -c "
+import sys; sys.path.insert(0, '$BIN')
+from sim_configs import SIM_CONFIGS
+print(' '.join('%s:%s' % (l, t) for l, _, ts in SIM_CONFIGS for t in ts))")
+fi
+
+JOBS="${COV_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+echo "  $(echo $PAIRS | wc -w | tr -d ' ') runs, $JOBS in parallel"
+printf '%s\n' $PAIRS | xargs -P "$JOBS" -I{} "$BIN/runcov" --one {} "$COV" | tee results.txt
+pass=$(grep -c ' PASS$' results.txt); skip=$(grep -c ' SKIP$' results.txt); fail=$(grep -c 'FAIL/TIMEOUT$' results.txt); nobuild=$(grep -c 'BUILD-FAIL$' results.txt)
+echo
+echo "  ran: $pass passed, $skip skipped (test not applicable), $fail failed, $nobuild build-fail"
+echo
+python3 "$BIN/cov_report.py" "$COV/dats"
+rc=$?
+echo
+python3 "$BIN/cov_html.py" "$COV/dats" -o "$COV/coverage.html"
+echo "  report: $COV/coverage.html"
+[ "$fail" -ne 0 ] || [ "$nobuild" -ne 0 ] && rc=1
+exit $rc

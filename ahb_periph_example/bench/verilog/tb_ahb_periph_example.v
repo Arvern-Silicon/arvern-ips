@@ -20,6 +20,12 @@
  `define ASYNC_RST_EN 1
 `endif
 
+// Peripheral address width (window = 1<<ADDRW bytes). Build-time overridable
+// via `-D ADDRW=8`.
+`ifndef ADDRW
+ `define ADDRW 7
+`endif
+
 module  tb_ahb_periph_example;
 
 //
@@ -27,6 +33,7 @@ module  tb_ahb_periph_example;
 //------------------------------
 
 parameter            ASYNC_RST_EN = `ASYNC_RST_EN;  // Reset style: 1=asynchronous active-low, 0=synchronous
+parameter            ADDRW        = `ADDRW;         // Peripheral address width
 
 // Clock / Reset
 reg                  hresetn;
@@ -65,6 +72,10 @@ reg           [31:0] periph0_reg_12_in;
 reg           [31:0] periph0_reg_13_in;
 reg           [31:0] periph0_reg_14_in;
 reg           [31:0] periph0_reg_15_in;
+
+// Another subordinate stalling the shared bus: lowers hready while this one
+// has no data phase in flight (a test must only raise it then).
+reg                  tb_bus_stall;
 
 // Testbench variables
 integer              tb_idx;
@@ -137,6 +148,7 @@ initial
      tmp_seed      = $urandom(tmp_seed);
      error         = 0;
      stimulus_done = 0;
+     tb_bus_stall  = 0;
 
      haddr  = 32'h00000000;
      hprot  =  4'h0;
@@ -147,14 +159,14 @@ initial
      hwrite =  1'h0;
   end
 
-assign hready = hreadyout;
-assign hsel   = (haddr>=32'h00400000) & (haddr<32'h00400080);
+assign hready = hreadyout & ~tb_bus_stall;
+assign hsel   = (haddr>=32'h00400000) & (haddr<(32'h00400000 + (32'h1 << ADDRW)));
 
 
 //
 // AHB PERIPHERAL INSTANCE
 //----------------------------------
-ahb_periph_example #(.ASYNC_RST_EN(ASYNC_RST_EN)) ahb_periph_example_inst0 (
+ahb_periph_example #(.ADDRW(ADDRW), .ASYNC_RST_EN(ASYNC_RST_EN)) ahb_periph_example_inst0 (
 
 // AHB CLOCK & RESET
     .hclk_i            ( hclk                   ),
@@ -162,7 +174,7 @@ ahb_periph_example #(.ASYNC_RST_EN(ASYNC_RST_EN)) ahb_periph_example_inst0 (
     .hclk_en_o         ( hclk_en                ),
 
 // AHB INTERFACE
-    .haddr_i           ( haddr[6:0]             ),
+    .haddr_i           ( haddr[ADDRW-1:0]       ),
     .hprot_i           ( hprot                  ),
     .hready_i          ( hready                 ),
     .hsmode_i          ( hsmode                 ),
@@ -218,6 +230,17 @@ initial
    `endif
   end
 
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once reset is released: the Verilator coverage flow starts
+// every flop at 1 so the asynchronous resets see an edge, and the reset driving them
+// to 0 would otherwise count as a toggle of every bit.
+initial begin
+    wait (hresetn === 1'b0);
+    @(posedge hresetn);
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 //
 // End of simulation

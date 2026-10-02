@@ -10,11 +10,10 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : reset_values
-// Module Description : Post-reset register values, read BEFORE any write. No
-//                      existing test reads reset values first, so a wrong reset
-//                      (e.g. an enable or priority not cleared -> spurious boot
-//                      interrupt) would be invisible. All PLIC registers reset
-//                      to 0; no external interrupt may be asserted at boot.
+// Module Description : Post-reset register values, read BEFORE any write. All PLIC
+//                      registers reset to 0; no external interrupt may be asserted
+//                      at boot (a priority or enable not cleared would give a
+//                      spurious boot interrupt).
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE     32'h00400000

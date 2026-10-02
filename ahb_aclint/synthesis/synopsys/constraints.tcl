@@ -53,7 +53,39 @@ create_clock -name     "clk_lf"                                     \
              -waveform "0 [expr $CLK_LF_PERIOD/2]"                  \
              [get_ports clk_lf_i]
 
-set_clock_groups -asynchronous -group {hclk} -group {clk_lf}
+set LF_REGS   [all_registers -clock clk_lf]
+set HCLK_REGS [all_registers -clock hclk]
+
+# An empty LF_REGS is the signature of LF_SYNC_EN=1: nothing is clocked by
+# clk_lf_i, so there is no LF domain.
+set LF_SYNC_MODE [expr {[sizeof_collection $LF_REGS] == 0}]
+
+
+##############################################################################
+#                        hclk <-> clk_lf CROSSINGS                           #
+##############################################################################
+# The MTIMER crosses these domains WITHOUT a handshake: each side may only move
+# at a time the other is not sampling (see aclint_lf_tick.v). Both directions
+# are therefore ordinary timing-constrained paths and must be CONSTRAINED, not
+# declared asynchronous -- a set_clock_groups -asynchronous here would make the
+# tool report clean and the part fail intermittently in silicon.
+#
+# Written -from/-to REGISTER COLLECTIONS, not [get_clocks ...]: at a ~3000:1
+# period ratio a clock-based exception exceeds DC's clock-expansion limit (1000)
+# and is silently dropped, leaving the endpoints unconstrained while the run
+# still reports timing MET.
+# Both budgets are derived in aclint_lf_tick.v ("tick timing and the two
+# budgets"): the tick lands 3 to 5 hclk after the clk_lf edge.
+if {!$LF_SYNC_MODE} {
+    # LF -> hclk: launched on the clk_lf edge, captured on lf_tick >= 3 hclk later.
+    set_max_delay [expr 3 * $CLOCK_PERIOD] \
+                  -from $LF_REGS -to $HCLK_REGS
+
+    # hclk -> LF: launched on lf_tick <= 5 hclk after the clk_lf edge, sampled
+    # by the NEXT clk_lf edge.
+    set_max_delay [expr $CLK_LF_PERIOD - 5 * $CLOCK_PERIOD] \
+                  -from $HCLK_REGS -to $LF_REGS
+}
 
 
 ##############################################################################
@@ -86,6 +118,7 @@ set HTRANS_DLY    [expr ($CLOCK_PERIOD/100) * 20]
 set HPROT_DLY     [expr ($CLOCK_PERIOD/100) * 20]
 set HSMODE_DLY    [expr ($CLOCK_PERIOD/100) * 20]
 set HREADY_DLY    [expr ($CLOCK_PERIOD/100) * 20]
+set AONEN_DLY     [expr ($CLOCK_PERIOD/100) * 20]
 set HWDATA_DLY    [expr ($CLOCK_PERIOD/100) * 20]
 
 # Outputs
@@ -117,6 +150,11 @@ set_input_delay 0             -min -clock "hclk"   [get_ports hsmode_i]
 
 set_input_delay $HREADY_DLY   -max -clock "hclk"   [get_ports hready_i]
 set_input_delay 0             -min -clock "hclk"   [get_ports hready_i]
+
+# hclk_aon_en_i is not a reset and not a test constant -- it gates hresetn_i into
+# the LF-tick trust reset, so it is real logic in every config and needs timing.
+set_input_delay $AONEN_DLY    -max -clock "hclk"   [get_ports hclk_aon_en_i]
+set_input_delay 0             -min -clock "hclk"   [get_ports hclk_aon_en_i]
 
 set_input_delay $HWDATA_DLY   -max -clock "hclk"   [get_ports hwdata_i]
 set_input_delay 0             -min -clock "hclk"   [get_ports hwdata_i]
@@ -186,13 +224,43 @@ set_output_delay 0                        -min -clock "hclk"   [get_ports hclk_e
 
 set WAKE_LF_DLY   [expr ($CLK_LF_PERIOD/100) * 75]
 
-set_output_delay $WAKE_LF_DLY  -add_delay -max -clock "clk_lf"   [get_ports mtimer_wake_lf_o]
-set_output_delay 0                        -min -clock "clk_lf"   [get_ports mtimer_wake_lf_o]
+# mtimer_wake_lf_o is launched by whichever clock the comparator runs on, which is the mode.
+if {$LF_SYNC_MODE} {
+    set WAKE_HCLK_DLY [expr ($CLOCK_PERIOD/100) * 75]
+    set_output_delay $WAKE_HCLK_DLY -add_delay -max -clock "hclk"   [get_ports mtimer_wake_lf_o]
+    set_output_delay 0                         -min -clock "hclk"   [get_ports mtimer_wake_lf_o]
+} else {
+    set_output_delay $WAKE_LF_DLY  -add_delay  -max -clock "clk_lf" [get_ports mtimer_wake_lf_o]
+    set_output_delay 0                         -min -clock "clk_lf" [get_ports mtimer_wake_lf_o]
+}
 
 
 #===============#
 # FALSE PATHS   #
 #===============#
 
-set_false_path -from hresetn_i
-set_false_path -from resetn_lf_i
+# scan_mode_i is a test-mode constant: no functional path through it to time.
+set_false_path -from scan_mode_i
+
+# THE RESET FALSE PATHS ARE CONDITIONAL ON THE RESET STYLE.
+#
+# With ASYNC_RST_EN=1 the resets drive asynchronous clear pins and there is
+# genuinely nothing to time. With ASYNC_RST_EN=0 the same nets are ORDINARY
+# SYNCHRONOUS DATA feeding the flops' D-side mux, and false-pathing them leaves
+# those paths unconstrained -- silently, since an unconstrained path is not a
+# violation. Give them an input delay instead.
+set ASYNC_RST_MODE [expr {![info exists RTL_PARAM_ASYNC_RST_EN] || $RTL_PARAM_ASYNC_RST_EN}]
+
+if {$ASYNC_RST_MODE} {
+    set_false_path -from hresetn_i
+    set_false_path -from resetn_lf_i
+} else {
+    set_input_delay $AONEN_DLY -max -clock "hclk"   [get_ports hresetn_i]
+    set_input_delay 0          -min -clock "hclk"   [get_ports hresetn_i]
+    if {!$LF_SYNC_MODE} {
+        set_input_delay $AONEN_DLY -max -clock "clk_lf" [get_ports resetn_lf_i]
+        set_input_delay 0          -min -clock "clk_lf" [get_ports resetn_lf_i]
+    } else {
+        set_false_path -from resetn_lf_i
+    }
+}

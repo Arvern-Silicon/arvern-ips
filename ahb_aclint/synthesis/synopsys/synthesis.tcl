@@ -106,15 +106,48 @@ if {$WITH_DC_ULTRA} {
 if {$WITH_DFT} {
 
     # DFT Signal Type Definitions
-    #set_dft_signal -view spec         -type ScanEnable  -port scan_enable_i -active_state 1
-    #set_dft_signal -view existing_dft -type ScanEnable  -port scan_enable_i -active_state 1
-    #set_dft_signal -view spec         -type Constant    -port scan_mode_i   -active_state 1
-    #set_dft_signal -view existing_dft -type Constant    -port scan_mode_i   -active_state 1
+
+    # scan_mode_i holds the clk_lf_i clock-as-data path isolated during test.
+    # Without declaring it, pre-DFT DRC still walks clk_lf_i structurally through
+    # the isolation gate to the synchronizer's D pin and reports D10.
+    set_dft_signal -view spec         -type Constant    -port scan_mode_i   -active_state 1
+    set_dft_signal -view existing_dft -type Constant    -port scan_mode_i   -active_state 1
+
+    # hclk_aon_en_i gates hresetn_i into the LF-tick trust reset, but the RTL
+    # takes it out of that path in scan mode (OR with scan_mode_i), so no
+    # declaration is needed for it: the reset is controllable from hresetn_i.
     set_dft_signal -view existing_dft -type ScanClock   -port hclk_i        -timing [list 45 55]
     set_dft_signal -view existing_dft -type ScanClock   -port hclk_aon_i    -timing [list 45 55]
-    set_dft_signal -view existing_dft -type ScanClock   -port clk_lf_i      -timing [list 45 55]
-    set_dft_signal -view existing_dft -type Reset       -port hresetn_i     -active 0
-    set_dft_signal -view existing_dft -type Reset       -port resetn_lf_i   -active 0
+
+    # clk_lf_i clocks flops only in asynchronous mode. Declaring it a ScanClock
+    # under LF_SYNC_EN=1 -- where it is purely a sampled data input -- produces a
+    # D8 "clock not able to capture" violation, because there is nothing for it
+    # to capture into. Same for resetn_lf_i, which then resets nothing.
+    if {![info exists LF_SYNC_MODE] || !$LF_SYNC_MODE} {
+        set_dft_signal -view existing_dft -type ScanClock   -port clk_lf_i      -timing [list 45 55]
+    }
+
+    # RESET STYLE. With ASYNC_RST_EN=1 the resets drive real async reset pins, so
+    # they are declared Reset and DFT controls them directly. With ASYNC_RST_EN=0
+    # they reach the flops through the D-side mux instead: declaring them Reset
+    # makes DRC treat them as clocks feeding data pins and report D10 on every
+    # flop they touch. Hold them INACTIVE as test-mode constants instead -- the
+    # reset path is then ordinary scan-testable datapath logic.
+    set ASYNC_RST_MODE [expr {![info exists RTL_PARAM_ASYNC_RST_EN] || $RTL_PARAM_ASYNC_RST_EN}]
+
+    if {$ASYNC_RST_MODE} {
+        set_dft_signal -view existing_dft -type Reset    -port hresetn_i   -active 0
+        if {![info exists LF_SYNC_MODE] || !$LF_SYNC_MODE} {
+            set_dft_signal -view existing_dft -type Reset    -port resetn_lf_i -active 0
+        }
+    } else {
+        set_dft_signal -view spec         -type Constant -port hresetn_i   -active_state 1
+        set_dft_signal -view existing_dft -type Constant -port hresetn_i   -active_state 1
+        if {![info exists LF_SYNC_MODE] || !$LF_SYNC_MODE} {
+            set_dft_signal -view spec         -type Constant -port resetn_lf_i -active_state 1
+            set_dft_signal -view existing_dft -type Constant -port resetn_lf_i -active_state 1
+        }
+    }
 
     # DFT Configuration
     set_dft_insertion_configuration -preserve_design_name true
@@ -160,6 +193,27 @@ redirect -file ./results/report.paths.max      {report_timing -path end  -delay 
 redirect -file ./results/report.full_paths.max {report_timing -path full -delay max -max_paths 5   -nworst 2}
 redirect -file ./results/report.paths.min      {report_timing -path end  -delay min -max_paths 200 -nworst 2}
 redirect -file ./results/report.full_paths.min {report_timing -path full -delay min -max_paths 5   -nworst 2}
+# The hclk <-> clk_lf crossings are ordinary timed paths under the max_delay
+# exceptions of constraints.tcl; report them on their own so the budget and the
+# slack of each direction are visible without digging through the top-200 list.
+# (Empty under LF_SYNC_EN=1: no clk_lf registers exist.)
+# (Collections re-queried here: the ones built in constraints.tcl are stale
+#  after compile and DFT insertion.)
+redirect -file ./results/report.lf_crossing {
+    # report_timing takes pins where set_max_delay took cells.
+    if {[sizeof_collection [all_registers -clock clk_lf]] > 0} {
+        set lf_clk_pins    [all_registers -clock clk_lf -clock_pins]
+        set lf_data_pins   [all_registers -clock clk_lf -data_pins]
+        set hclk_clk_pins  [all_registers -clock hclk   -clock_pins]
+        set hclk_data_pins [all_registers -clock hclk   -data_pins]
+        echo "==== clk_lf -> hclk (LF registers to hclk registers) ===="
+        report_timing -path full -delay max -from $lf_clk_pins   -to $hclk_data_pins -max_paths 2
+        echo "==== hclk -> clk_lf (hclk registers to LF registers) ===="
+        report_timing -path full -delay max -from $hclk_clk_pins -to $lf_data_pins   -max_paths 2
+    } else {
+        echo "LF_SYNC_EN=1: no clk_lf domain, no crossing."
+    }
+}
 redirect -file ./results/report.refs           {report_reference}
 redirect -file ./results/report.area           {report_area}
 redirect -file ./results/report.full_area      {report_area -hierarchy}

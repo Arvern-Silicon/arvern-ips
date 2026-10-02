@@ -27,3 +27,31 @@ echo ""
 verilator --lint-only -Wall -Wpedantic --top ahb_interconnect_fused waivers_fused.vlt -f submit_lint.f
 
 echo ""
+echo ""
+echo " ======================================================"
+echo "|         LINT:  Parameter corner sweep                |"
+echo " ======================================================"
+echo ""
+# Every top must elaborate cleanly at the extremes its own range checks admit.
+# NR_M maximum is 16 (generic) / 15 (hiperf, fused NX side); minimum is 1.
+lint_at() {   # lint_at <top> <waivers> <-Gparam=value ...>
+    local top=$1 wv=$2; shift 2
+    if verilator --lint-only -Wall -Wpedantic --top "$top" "$wv" -f submit_lint.f "$@" > lint_sweep.log 2>&1; then
+        echo "  OK    $top $*"
+    else
+        echo "  FAIL  $top $*"
+        grep -E "^%(Error|Warning)" lint_sweep.log | head -4 | sed 's/^/        /'
+        lint_sweep_fail=1
+    fi
+}
+lint_sweep_fail=0
+lint_at ahb_interconnect_generic waivers_generic.vlt -GNR_M=1
+lint_at ahb_interconnect_generic waivers_generic.vlt -GNR_M=16
+lint_at ahb_interconnect_hiperf  waivers_hiperf.vlt  -GNR_M=1
+lint_at ahb_interconnect_hiperf  waivers_hiperf.vlt  -GNR_M=15
+lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_M=1
+lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_M=15
+lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_S_X_ROM=0
+rm -f lint_sweep.log
+echo ""
+[ $lint_sweep_fail -eq 0 ] && echo "LINT SWEEP PASSED" || echo "LINT SWEEP FAILED"

@@ -29,7 +29,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-from sim_configs import SIM_CONFIGS, MANDATORY_COVER_BINS   # noqa: E402
+from sim_configs import SIM_CONFIGS                        # noqa: E402
+import coverage                                              # noqa: E402
 
 CWD = Path.cwd()
 LOG_ROOT = CWD / "log_sweep"
@@ -99,6 +100,12 @@ def run_one(config_label, defines, test, log_dir):
         return "PASS"
     if "SIMULATION FAILED" in log_text:
         return "FAIL"
+    # A test that opted out via tb_skip_finish (incompatible with this config)
+    # prints its own banner. Classifying it separately is what keeps
+    # INCONCLUSIVE meaningful: without this, a deliberate skip and a crashed or
+    # hung simulation land in the same bucket and neither can be spotted.
+    if "SIMULATION SKIPPED" in log_text:
+        return "SKIP"
     return "INCONCLUSIVE"
 
 
@@ -108,41 +115,9 @@ def fmt_defines(defines):
     return " ".join(f"{p}={v}" for p, v in sorted(defines.items()))
 
 
-def collect_coverage(log_root):
-    """Union the 'COVERAGE HIT: <bin>' lines across every per-config log."""
-    hit = set()
-    for log_path in log_root.rglob("*.log"):
-        for line in log_path.read_text(errors="ignore").splitlines():
-            marker = "COVERAGE HIT:"
-            if marker in line:
-                # bin name is the last whitespace-delimited token (the emit
-                # is space-padded by the Verilog %s on a fixed-width reg).
-                name = line.split(marker, 1)[1].split()
-                if name:
-                    hit.add(name[-1])
-    return hit
-
-
 def report_coverage(log_root):
-    """Return the list of mandatory bins never hit in any config."""
-    hit = collect_coverage(log_root)
-    missing = [b for b in MANDATORY_COVER_BINS if b not in hit]
-    lines = []
-    lines.append("=" * 90)
-    lines.append(f"  functional coverage gate -- {len(MANDATORY_COVER_BINS) - len(missing)}"
-                 f"/{len(MANDATORY_COVER_BINS)} mandatory bins hit (union across all configs)")
-    lines.append("=" * 90)
-    if missing:
-        for b in missing:
-            lines.append(f"  COVERAGE GAP: mandatory bin never hit in any config -> {b}")
-        lines.append(f"  -> coverage FAILED ({len(missing)} bin(s) unexercised)")
-    else:
-        lines.append("  -> coverage PASSED (all mandatory bins exercised)")
-    report = "\n".join(lines)
-    print()
-    print(report)
-    (log_root / "coverage.log").write_text(report + "\n")
-    return missing
+    """Suite-level gate: every mandatory bin must be hit by some config."""
+    return coverage.report(log_root, single_config=False)
 
 
 def main():
@@ -176,14 +151,18 @@ def main():
     summary_lines = []
     summary_lines.append(f"{'CONFIG':<14} {'TEST':<28} {'DEFINES':<32} STATUS")
     summary_lines.append("-" * 90)
-    counts = {"PASS": 0, "FAIL": 0, "COMPILE_FAIL": 0, "INCONCLUSIVE": 0, "MISS": 0}
+    counts = {"PASS": 0, "FAIL": 0, "SKIP": 0,
+              "COMPILE_FAIL": 0, "INCONCLUSIVE": 0, "MISS": 0}
     for cfg, defines, test, status in all_results:
         counts[status] = counts.get(status, 0) + 1
         summary_lines.append(f"{cfg:<14} {test:<28} {fmt_defines(defines):<32} {status}")
     summary_lines.append("-" * 90)
+    # Every category is shown, INCONCLUSIVE included: it fails the exit status
+    # just like FAIL, COMPILE_FAIL and MISS.
     summary_lines.append(
         f"  total: {len(all_results)}    "
         f"passed: {counts['PASS']}    failed: {counts['FAIL']}    "
+        f"skipped: {counts['SKIP']}    inconclusive: {counts['INCONCLUSIVE']}    "
         f"compile-fail: {counts['COMPILE_FAIL']}    missing: {counts['MISS']}"
     )
     summary = "\n".join(summary_lines)

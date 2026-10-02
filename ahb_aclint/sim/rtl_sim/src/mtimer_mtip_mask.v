@@ -9,35 +9,58 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
-// File Name          : mtimer_mtip_mask
-// Module Description : Isolate the MTIP write-busy suppression mask. The output
-//                      is irq_m_timer_o = irq_sync & ~mtimecmp_write_busy
-//                      (aclint_mtimer.v:320): MTIP must be forced low for a
-//                      hart while that hart's MTIMECMP write CDC is in flight,
-//                      EVEN THOUGH the underlying synchronised comparator
-//                      (irq_sync) is still asserted. No existing test
-//                      distinguishes "MTIP low because masked" from "MTIP low
-//                      because the compare value changed", so a dropped or
-//                      stuck mask term would be invisible. Here the compare
-//                      value is held matched (write the same value), so
-//                      irq_sync stays high and the ONLY reason MTIP drops is
-//                      the mask.
+// File Name          : mtimer_mtip_mask.v
+// Module Description : NO TRAP STORM WHEN MTIMECMP IS REPROGRAMMED.
+//
+//                      The hazard is the canonical one: firmware takes an MTI,
+//                      writes a future mtimecmp inside the handler, and MRETs.
+//                      If MTIP is still asserted from the OLD compare when it
+//                      returns, the trap re-fires immediately and the handler
+//                      never makes progress.
+//
+//                      There is no suppression mask: irq_m_timer_o compares on
+//                      the hclk side against stage 1 of MTIMECMP, which takes
+//                      the write in the AHB write cycle itself, so MTIP reacts
+//                      to a reprogram within one cycle and never reflects the
+//                      old compare while the value crosses to the LF side.
+//
+//                      The test checks the PROPERTY rather than the
+//                      mechanism: after a reprogram to a future deadline, MTIP
+//                      must go low and STAY low. Any re-assertion before the new
+//                      deadline -- however brief -- is the trap storm, whether
+//                      it comes from a stale compare, a torn 64-bit update, or a
+//                      partial load.
 //----------------------------------------------------------------------------
 
-reg mask_seen;
-reg mask_violation;
-integer guard;
+integer    guard;
+integer    glitches;
+reg        watch_glitch;
+reg        mtip_d;
+reg [63:0] mt_now;
+reg [63:0] mt_target;
 
-// Continuous monitor (robust to exact CDC timing): whenever hart 0's MTIMECMP
-// write is busy AND the synchronised comparator is still asserted, the masked
-// output MUST be low. mask_seen records the mask working; mask_violation records
-// any cycle the mask failed to suppress the output.
-initial begin mask_seen = 1'b0; mask_violation = 1'b0; end
-always @(negedge free_clk)
-   if ((tb_ahb_aclint.dut.u_mtimer.write_lo_busy[0] === 1'b1) &&
-       (tb_ahb_aclint.dut.u_mtimer.irq_sync[0]       === 1'b1)) begin
-      if (tb_ahb_aclint.dut.irq_m_timer_o[0] === 1'b0) mask_seen      = 1'b1;
-      if (tb_ahb_aclint.dut.irq_m_timer_o[0] === 1'b1) mask_violation = 1'b1;
+`define MTIME_LO_ADDR    32'h0040BFF8
+`define MTIME_HI_ADDR    32'h0040BFFC
+`define MTIMECMP_LO_ADDR 32'h00404000
+`define MTIMECMP_HI_ADDR 32'h00404004
+
+// Any rising edge of MTIP while we are watching is a violation: the deadline is
+// far in the future, so the only way it can re-assert is a transient.
+initial
+   begin
+      glitches     = 0;
+      watch_glitch = 1'b0;
+      mtip_d       = 1'b0;
+      forever begin
+         // Mid-cycle sample: MTIP is combinational off registers clocked on the
+         // free_clk rising edge, so a rising-edge sample can land between their updates.
+         @(negedge free_clk);
+         if (watch_glitch && (tb_ahb_aclint.dut.irq_m_timer_o[0] === 1'b1) && (mtip_d === 1'b0)) begin
+            glitches = glitches + 1;
+            $display("INFO:  spurious MTIP re-assertion after reprogram %t ns", $time);
+         end
+         mtip_d = tb_ahb_aclint.dut.irq_m_timer_o[0];
+      end
    end
 
 initial
@@ -48,72 +71,64 @@ initial
       repeat(20) @(posedge free_clk);
 
       $display(" ===============================================");
-      $display("|     MTIMER : MTIP WRITE-BUSY SUPPRESSION      |");
+      $display("|   MTIMER : NO TRAP STORM ON REPROGRAM         |");
       $display(" ===============================================");
 
-      // Program MTIMECMP[0] = 0 so the comparator is permanently matched
-      // (mtime >= 0 always) -> irq_sync settles high and stays high.
-      ahb_write(1, MACHINE, 32'h00404004, 32'h00000000, 2, OK);
-      ahb_write(1, MACHINE, 32'h00404000, 32'h00000000, 2, OK);
+      // Arm a deadline already in the past so MTIP is pending, exactly as it
+      // would be on entry to the handler.
+      ahb_write(1, MACHINE, `MTIMECMP_HI_ADDR, 32'h00000000, 2, OK);
+      ahb_write(1, MACHINE, `MTIMECMP_LO_ADDR, 32'h00000001, 2, OK);
 
-      // Wait for the CDC + 2-FF sync so irq_m_timer_o[0] is solidly asserted.
       guard = 0;
-      while ((tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b1) && (guard < 400)) begin
+      while ((tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b1) && (guard < `LF_CYCLES(20))) begin
          @(posedge free_clk);
          guard = guard + 1;
       end
+
       if (tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b1) begin
-         $display("ERROR: MTIP[0] never asserted during setup -- cannot test the mask %t ns", $time);
+         $display("ERROR: MTIP never asserted for an already-expired deadline %t ns", $time);
          error = error + 1;
       end else begin
-         $display("INFO:  MTIP[0] asserted, irq_sync[0]=%b %t ns",
-                  tb_ahb_aclint.dut.u_mtimer.irq_sync[0], $time);
+         $display("PASS:  MTIP pending on an expired deadline %t ns", $time);
       end
 
-      // Now write the SAME MTIMECMP_LO value again. The compare result does not
-      // change (irq_sync stays high), but write_lo_busy[0] goes high and must
-      // mask irq_m_timer_o[0] low for the duration of the handshake. The
-      // continuous monitor above captures the masked window regardless of the
-      // exact cycle busy rises/falls.
-      ahb_write(1, MACHINE, 32'h00404000, 32'h00000000, 2, OK);
+      // Reprogram to a deadline far enough out that nothing legitimate can fire.
+      // Written HI-then-LO, the documented order.
+      mt_now    = tb_ahb_aclint.dut.u_mtimer.u_count_lf.mtime_lf;
+      mt_target = mt_now + 64'd100000;
 
-      // Wait for the write CDC handshake to fully drain.
+      watch_glitch = 1'b1;
+      mtip_d       = tb_ahb_aclint.dut.irq_m_timer_o[0];
+      ahb_write(1, MACHINE, `MTIMECMP_HI_ADDR, mt_target[63:32], 2, OK);
+      ahb_write(1, MACHINE, `MTIMECMP_LO_ADDR, mt_target[31:0],  2, OK);
+
+      // MTIP must drop once the new compare reaches the LF domain.
       guard = 0;
-      while ((tb_ahb_aclint.dut.u_mtimer.write_lo_busy[0] === 1'b1) && (guard < 400)) begin
+      while ((tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b0) && (guard < `LF_CYCLES(20))) begin
          @(posedge free_clk);
          guard = guard + 1;
       end
-      repeat(4) @(negedge free_clk);   // let the monitor settle past the busy edge
 
-      if (mask_violation) begin
-         $display("ERROR: MTIP[0] NOT masked during write-busy (mask term dropped) %t ns", $time);
-         error = error + 1;
-      end
-      if (mask_seen) begin
-         $display("PASS:  MTIP[0] held low by write-busy mask while irq_sync stayed high %t ns", $time);
-      end else begin
-         $display("ERROR: never observed the write-busy mask suppressing MTIP[0] %t ns", $time);
-         error = error + 1;
-      end
-
-      // After the handshake completes the mask releases and MTIP returns high
-      // (compare value is unchanged and still matched).
-      guard = 0;
-      while ((tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b1) && (guard < 400)) begin
-         @(posedge free_clk);
-         guard = guard + 1;
-      end
-      if (tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b1) begin
-         $display("ERROR: MTIP[0] did not return high after write-busy cleared %t ns", $time);
+      if (tb_ahb_aclint.dut.irq_m_timer_o[0] !== 1'b0) begin
+         $display("ERROR: MTIP still asserted %0d cycles after reprogramming to a future deadline %t ns",
+                  guard, $time);
          error = error + 1;
       end else begin
-         $display("PASS:  MTIP[0] returned high after the mask released %t ns", $time);
+         $display("PASS:  MTIP cleared after reprogram (%0d cycles) %t ns", guard, $time);
       end
 
-      // Cleanup.
-      ahb_write(1, MACHINE, 32'h00404000, 32'hFFFFFFFF, 2, OK);
-      ahb_write(1, MACHINE, 32'h00404004, 32'hFFFFFFFF, 2, OK);
-      repeat(40) @(posedge free_clk);
+      // Now the real check: it must STAY low. Watch several LF periods -- long
+      // enough for any partial load, torn update or stale-compare transient to
+      // show itself, and still far short of the new deadline.
+      repeat(`LF_CYCLES(12)) @(posedge free_clk);
+      watch_glitch = 1'b0;
+
+      if (glitches != 0) begin
+         $display("ERROR: MTIP re-asserted %0d time(s) after reprogram -- trap storm %t ns", glitches, $time);
+         error = error + 1;
+      end else begin
+         $display("PASS:  MTIP stayed low across the reprogram window (no trap storm) %t ns", $time);
+      end
 
       repeat(21) @(posedge free_clk);
       $display("");

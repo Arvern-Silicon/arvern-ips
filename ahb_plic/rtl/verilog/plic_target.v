@@ -15,11 +15,12 @@
 //                      Instantiated NUM_CONTEXTS times by the top wrapper.
 //
 //                      Arbiter rule: among sources s in [1..NUM_SOURCES]
-//                      where pending_i[s] & enable_i[s] & (priority_i[s] >
-//                      threshold), pick the one with the highest priority;
-//                      ties broken by lowest source ID. Output is
-//                      top_source_id_o (0 if none qualify) and irq_o =
-//                      (top_source_id_o != 0).
+//                      where pending_i[s] & enable_i[s] & (priority_i[s] !=
+//                      0), pick the one with the highest priority (the
+//                      threshold does not apply to the claim); ties broken by
+//                      lowest source ID. Output is
+//                      top_source_id_o (0 if none qualify); irq_o is high
+//                      when a qualifying source has priority > threshold.
 //
 //                      Address map (3-bit byte address inside the per-target
 //                      register area):
@@ -32,8 +33,9 @@
 //                                      claim_source_id_o = top.
 //                              Write : asserts a one-cycle complete_pulse_o
 //                                      with complete_source_id_o =
-//                                      reg_wr_data_i[10:0]. Validity is
-//                                      checked downstream by plic_pending.
+//                                      reg_wr_data_i[10:0], only for a valid
+//                                      ID (1..NUM_SOURCES as a whole word,
+//                                      enabled for this context).
 //
 //                      Pulses are masked with the pulse condition: when the
 //                      pulse is low, the corresponding *_source_id_o output
@@ -73,7 +75,7 @@ module  plic_target #(
     output wire                          [10:0] complete_source_id_o,    // = reg_wr_data_i[10:0] when pulse high, else 0
 
 // IRQ + TOP-SOURCE STATUS (combinational)
-    output wire                                 irq_o,                   // 1 when top_source_id_o != 0
+    output wire                                 irq_o,                   // 1 when a qualifying source has priority > threshold
     output wire                          [10:0] top_source_id_o          // Winning source ID; 0 if none qualify
 );
 
@@ -97,68 +99,80 @@ arv_ipdff #(.WIDTH(PRIO_BITS), .ARST_EN(ARST_EN)) u_threshold (
 
 
 //=============================================================================
-// 2)  PRIORITY ARBITER (two parallel maxes -- spec compliance)
+// 2)  PRIORITY ARBITER
 //=============================================================================
-// Two independent max-priority arbiters are run in one combinational loop:
+//   Claim winner: highest-priority (pending & enable & priority != 0) source,
+//   IGNORING the threshold. Per PLIC 1.0.0, Chapter 8: "The claim operation is
+//   not affected by the setting of the priority threshold register." Feeds the
+//   claim read data and the claim pulse. Ties go to the lowest source ID.
 //
-//   top_id_claim / top_prio_claim : highest-priority (pending & enable) source,
-//                                   IGNORING the threshold. Per PLIC 1.0.0
-//                                   spec, Chapter 8: "The claim operation is
-//                                   not affected by the setting of the
-//                                   priority threshold register." Feeds the
-//                                   AHB read-mux for claim/complete (0x4) and
-//                                   the claim_source_id_o pulse.
+//   irq_o: some qualifying source has priority > threshold (Chapter 7: the
+//   PLIC masks interrupts of priority <= threshold). Only the existence of
+//   such a source matters, so it is an OR-reduce, not a second max.
 //
-//   top_id_irq   / top_prio_irq   : same set ALSO masked by (prio > threshold).
-//                                   Per PLIC 1.0.0 spec, Chapter 7: the PLIC
-//                                   masks interrupts of priority <= threshold.
-//                                   Drives irq_o (the line to the hart).
-//
-// Tie-break (both maxes): iterate sources high-to-low and use `>=` so the
-// lowest source ID overwrites a tie. Source 0 cannot win either max because
-// its priority is hard-tied 0 (plic_priority) and the qualifies-claim term
-// requires pending[0] which is hard-tied 0 (plic_pending).
-// Per RISC-V PLIC 1.0 Chapter 4: "A priority value of 0 is reserved to
-// mean 'never interrupt' and effectively disables the interrupt."
+// The claim winner is a binary tree over the sources, depth clog2(NUM_SOURCES+1):
+// each node keeps its right (higher-ID) child only if that child is valid and
+// has a strictly higher priority, so a tie keeps the left (lower-ID) child.
+// Source 0 is a leaf that never qualifies (priority and pending hard-tied 0).
+// Per RISC-V PLIC 1.0 Chapter 4: "A priority value of 0 is reserved to mean
+// 'never interrupt' and effectively disables the interrupt."
 
-// Sized casts of the unsigned NUM_SOURCES parameter so the loop bounds and
-// array indices below stay width-clean for both DC (no VER-318 signed->unsigned)
-// and Verilator (no WIDTHEXPAND/TRUNC).
+// Sized casts of the unsigned NUM_SOURCES parameter so loop bounds and array
+// indices stay width-clean for both DC (no VER-318) and Verilator.
 localparam        [31:0] NUM_SOURCES_INT = NUM_SOURCES;
 localparam        [10:0] NUM_SOURCES_S11 = NUM_SOURCES_INT[10:0];
 localparam               SRC_IDX_W       = $clog2(NUM_SOURCES + 1);
 
-reg  [10:0]            top_id_claim_r;
-reg  [PRIO_BITS-1:0]   top_prio_claim_r;
-reg  [10:0]            top_id_irq_r;
-reg  [PRIO_BITS-1:0]   top_prio_irq_r;
+localparam LEAF_W = (NUM_SOURCES < 1) ? 1 : $clog2(NUM_SOURCES + 1);
+localparam NLEAF  = 1 << LEAF_W;                 // leaves: sources 0..NLEAF-1
 
-always @(*) begin : arb_loop
-    reg           [10:0] s_i;    // 0..NUM_SOURCES (max 1023)
-    reg  [PRIO_BITS-1:0] prio_s;
-    reg                  qual_claim_s;
-    reg                  qual_irq_s;
-    top_id_claim_r   = 11'h0;
-    top_prio_claim_r = {PRIO_BITS{1'b0}};
-    top_id_irq_r     = 11'h0;
-    top_prio_irq_r   = {PRIO_BITS{1'b0}};
-    for (s_i = NUM_SOURCES_S11; s_i >= 11'h1; s_i = s_i - 11'h1) begin
-        prio_s       = priority_i[PRIO_BITS*s_i +: PRIO_BITS];
-        qual_claim_s = pending_i[s_i[SRC_IDX_W-1:0]] & enable_i[s_i[SRC_IDX_W-1:0]] & (prio_s != {PRIO_BITS{1'b0}});
-        qual_irq_s   = qual_claim_s   & (prio_s > threshold);
-        if (qual_claim_s && (prio_s >= top_prio_claim_r)) begin
-            top_id_claim_r   = s_i;
-            top_prio_claim_r = prio_s;
-        end
-        if (qual_irq_s   && (prio_s >= top_prio_irq_r)) begin
-            top_id_irq_r     = s_i;
-            top_prio_irq_r   = prio_s;
+// One vector set per tree level: level 0 holds the leaves (source i at index
+// i), level l+1 node k combines level-l nodes 2k (lower IDs) and 2k+1; the
+// root is level LEAF_W, node 0.
+wire [NUM_SOURCES:1] qual_irq;
+
+genvar gl, gk;
+generate
+    for (gl = 0; gl <= LEAF_W; gl = gl + 1) begin : G_LVL
+        localparam NN = NLEAF >> gl;
+        wire [NN-1:0]           v;
+        wire [NN*PRIO_BITS-1:0] p;
+        wire [NN*LEAF_W-1:0]    id;
+        if (gl == 0) begin : G_LEAVES
+            for (gk = 0; gk < NLEAF; gk = gk + 1) begin : G_LEAF
+                if ((gk >= 1) && (gk <= NUM_SOURCES)) begin : G_SRC
+                    wire [PRIO_BITS-1:0] prio = priority_i[PRIO_BITS*gk +: PRIO_BITS];
+                    wire                 qual = pending_i[gk] & enable_i[gk] & (prio != {PRIO_BITS{1'b0}});
+                    assign v[gk]                          = qual;
+                    assign p[PRIO_BITS*gk +: PRIO_BITS]   = prio;
+                    assign qual_irq[gk]                   = qual & (prio > threshold);
+                end else begin : G_NONE
+                    assign v[gk]                          = 1'b0;
+                    assign p[PRIO_BITS*gk +: PRIO_BITS]   = {PRIO_BITS{1'b0}};
+                end
+                assign id[LEAF_W*gk +: LEAF_W] = gk[LEAF_W-1:0];
+            end
+        end else begin : G_NODES
+            for (gk = 0; gk < NN; gk = gk + 1) begin : G_NODE
+                wire                 lv = G_LVL[gl-1].v[2*gk];
+                wire                 rv = G_LVL[gl-1].v[2*gk+1];
+                wire [PRIO_BITS-1:0] lp = G_LVL[gl-1].p[PRIO_BITS*(2*gk)   +: PRIO_BITS];
+                wire [PRIO_BITS-1:0] rp = G_LVL[gl-1].p[PRIO_BITS*(2*gk+1) +: PRIO_BITS];
+                wire [LEAF_W-1:0]    li = G_LVL[gl-1].id[LEAF_W*(2*gk)   +: LEAF_W];
+                wire [LEAF_W-1:0]    ri = G_LVL[gl-1].id[LEAF_W*(2*gk+1) +: LEAF_W];
+                wire                 take_r = rv & (~lv | (rp > lp));
+                assign v[gk]                        = lv | rv;
+                assign p[PRIO_BITS*gk +: PRIO_BITS] = take_r ? rp : lp;
+                assign id[LEAF_W*gk +: LEAF_W]      = take_r ? ri : li;
+            end
         end
     end
-end
+endgenerate
 
-assign top_source_id_o = top_id_claim_r;
-assign irq_o           = (top_id_irq_r != 11'h0);
+wire [10:0] top_id_claim = G_LVL[LEAF_W].v[0] ? {{(11-LEAF_W){1'b0}}, G_LVL[LEAF_W].id[LEAF_W-1:0]} : 11'h0;
+
+assign top_source_id_o = top_id_claim;
+assign irq_o           = |qual_irq;
 
 
 //=============================================================================
@@ -177,8 +191,8 @@ assign irq_o           = (top_id_irq_r != 11'h0);
 // top guarantees is one-cycle (every sub-block is single-cycle, hreadyout_o=1,
 // so dph_valid is asserted for exactly one cycle per transfer).
 
-assign claim_pulse_o        = access_claim & ~reg_wr_en_i & (top_id_claim_r != 11'h0);
-assign claim_source_id_o    = claim_pulse_o ? top_id_claim_r : 11'h0;
+assign claim_pulse_o        = access_claim & ~reg_wr_en_i & (top_id_claim != 11'h0);
+assign claim_source_id_o    = claim_pulse_o ? top_id_claim : 11'h0;
 
 // Per-target enable check for completion: id in 1..NUM_SOURCES AND enable_i[id]=1.
 // enable_i[0] is hard-tied 0 by plic_enable, so id=0 also drops the pulse via
@@ -192,17 +206,20 @@ assign claim_source_id_o    = claim_pulse_o ? top_id_claim_r : 11'h0;
 // not a power of two (e.g. NUM_SOURCES=50,100) -- functionally masked by
 // `complete_id_in_range` but a real X-prop hazard in sim.
 
+// The ID is the whole data word: a value with any bit above [10] set is out of
+// range, not an alias of its low bits.
 wire [10:0]            complete_id_w        = reg_wr_data_i[10:0];
 wire                   complete_id_in_range = (complete_id_w != 11'h0) &
-                                              (complete_id_w <= NUM_SOURCES[10:0]);
+                                              (complete_id_w <= NUM_SOURCES[10:0]) &
+                                              ~|reg_wr_data_i[31:11];
 
 reg          complete_id_enabled_r;
 reg   [10:0] ee;    // 1..NUM_SOURCES (max 1023)
 always @* begin
     complete_id_enabled_r = 1'b0;
     for (ee = 11'h1; ee <= NUM_SOURCES_S11; ee = ee + 11'h1)
-        if (complete_id_w == ee)
-            complete_id_enabled_r = enable_i[ee[SRC_IDX_W-1:0]];
+        complete_id_enabled_r = complete_id_enabled_r |
+                                ((complete_id_w == ee) & enable_i[ee[SRC_IDX_W-1:0]]);
 end
 wire   complete_id_enabled  = complete_id_in_range & complete_id_enabled_r;
 
@@ -219,7 +236,7 @@ assign complete_source_id_o = complete_pulse_o ? complete_id_w : 11'h0;
 reg  [31:0] rd_mux;
 always @(*) begin
     if (access_claim)
-        rd_mux = {21'h0, top_id_claim_r};
+        rd_mux = {21'h0, top_id_claim};
     else
         rd_mux = {{(32-PRIO_BITS){1'b0}}, threshold};
 end
@@ -268,6 +285,8 @@ assign               priority0_unused        = priority_i[PRIO_BITS-1:0];
 
 wire                 pending0_enable0_unused;
 assign               pending0_enable0_unused = pending_i[0] | enable_i[0];
+
+wire                 top_prio_unused         = |G_LVL[LEAF_W].p;
 
 endmodule // plic_target
 

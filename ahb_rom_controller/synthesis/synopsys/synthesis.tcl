@@ -107,7 +107,19 @@ if {$WITH_DFT} {
 
     # DFT Signal Type Definitions
     set_dft_signal -view existing_dft -type ScanClock   -port hclk_i        -timing [list 45 55]
-    set_dft_signal -view existing_dft -type Reset       -port hresetn_i     -active 0
+
+    # RESET STYLE. With ASYNC_RST_EN=1 the reset drives real async reset pins and
+    # is declared Reset. With ASYNC_RST_EN=0 it reaches the flops through the
+    # D-side mux: declared Reset, DRC would treat it as a clock feeding data pins
+    # (D10). Hold it inactive as a test-mode constant instead.
+    set ASYNC_RST_MODE [expr {![info exists RTL_PARAM_ASYNC_RST_EN] || $RTL_PARAM_ASYNC_RST_EN}]
+    if {$ASYNC_RST_MODE} {
+        set_dft_signal -view existing_dft -type Reset    -port hresetn_i   -active 0
+    } else {
+        set_dft_signal -view spec         -type Constant -port hresetn_i   -active_state 1
+        set_dft_signal -view existing_dft -type Constant -port hresetn_i   -active_state 1
+    }
+
 
     # DFT Configuration
     set_dft_insertion_configuration -preserve_design_name true

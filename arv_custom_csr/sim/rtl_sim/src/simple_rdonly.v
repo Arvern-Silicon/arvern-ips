@@ -37,12 +37,12 @@ initial
 
       // Drive distinct values onto each RO input. The mux is purely
       // combinational so the next read should reflect them.
-      ccsr_usr_ro0 = 32'hAAAA0000;
-      ccsr_usr_ro1 = 32'hAAAA0001;
-      ccsr_sup_ro0 = 32'hBBBB0000;
-      ccsr_sup_ro1 = 32'hBBBB0001;
-      ccsr_mac_ro0 = 32'hCCCC0000;
-      ccsr_mac_ro1 = 32'hCCCC0001;
+      usr_ro_pad[0*32+:32] = 32'hAAAA0000;
+      usr_ro_pad[1*32+:32] = 32'hAAAA0001;
+      sup_ro_pad[0*32+:32] = 32'hBBBB0000;
+      sup_ro_pad[1*32+:32] = 32'hBBBB0001;
+      mac_ro_pad[0*32+:32] = 32'hCCCC0000;
+      mac_ro_pad[1*32+:32] = 32'hCCCC0001;
 
       repeat(5) @(posedge free_clk);
       csr_read(12'hCC0, 32'hAAAA0000, 1);
@@ -67,9 +67,9 @@ initial
       csr_read(12'hFC0, 32'hCCCC0000, 1);
 
       // Change the inputs again and verify reads track immediately.
-      ccsr_usr_ro0 = 32'h12345678;
-      ccsr_sup_ro1 = 32'h87654321;
-      ccsr_mac_ro0 = 32'h0F0F0F0F;
+      usr_ro_pad[0*32+:32] = 32'h12345678;
+      sup_ro_pad[1*32+:32] = 32'h87654321;
+      mac_ro_pad[0*32+:32] = 32'h0F0F0F0F;
       repeat(2) @(posedge free_clk);
       csr_read(12'hCC0, 32'h12345678, 1);
       csr_read(12'hDC1, 32'h87654321, 1);

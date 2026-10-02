@@ -329,6 +329,55 @@ endtask
 
 
 //=============================================================================
+// 9c) MACRO ADDRESS MONITOR  (T15)
+//
+//     rom_addr_o is the full 30-bit word address (haddr[31:2]) of the read being
+//     served: while wk_on is set, every ROM command must carry the word address
+//     of one of the last WK_RING reads presented on either port.
+//=============================================================================
+
+localparam WK_RING = 8;
+
+reg                    wk_on;
+reg            [29:0]  wk_ring [0:WK_RING-1];
+integer                wk_wp;
+integer                wk_cmds;
+integer                wk_bad;
+integer                wk_k;
+reg                    wk_hit;
+
+initial begin
+    wk_on   = 1'b0;
+    wk_wp   = 0;
+    wk_cmds = 0;
+    wk_bad  = 0;
+end
+
+task wk_note;
+    input [31:0] addr;
+    begin
+        wk_ring[wk_wp % WK_RING] = addr[31:2];
+        wk_wp = wk_wp + 1;
+    end
+endtask
+
+always @(negedge free_clk)
+    if (wk_on && hresetn && (rom_cen === 1'b0)) begin
+        wk_cmds = wk_cmds + 1;
+        wk_hit  = 1'b0;
+        for (wk_k = 0; wk_k < WK_RING; wk_k = wk_k + 1)
+            if (rom_addr === wk_ring[wk_k]) wk_hit = 1'b1;
+        if (!wk_hit) begin
+            wk_bad = wk_bad + 1;
+            error  = error + 1;
+            if (wk_bad <= 8)
+                $display("ERROR [T15]: ROM command at word address 0x%08h, not the haddr[31:2] of a presented read  (%0t ns)",
+                         rom_addr, $time);
+        end
+    end
+
+
+//=============================================================================
 // 10)  TEST STIMULUS
 //=============================================================================
 
@@ -973,6 +1022,82 @@ initial begin
 
 
     // =======================================================================
+    // T15 -- Address walk at the controller boundary
+    //
+    //       Walking-one and walking-zero haddr over bits 2..31 on both ports in
+    //       the same cycle (then with the patterns swapped), so every contest
+    //       leaves a walking address held for the losing port; then both ports
+    //       stream the walks back to back [RR mode only].  Every ROM command
+    //       must carry the full haddr[31:2] of a presented read (monitor 9c),
+    //       there is at least one command per read, and each read returns the
+    //       word the macro's sliced address selects.
+    // =======================================================================
+    test_title = "T15: Address walk, both ports";
+    $display("");
+    $display("================================================================");
+    $display("T15: Address walk -- walking-one / walking-zero haddr, both ports");
+    $display("================================================================");
+
+    begin : t15
+        integer    b, p, nrd;
+        reg [31:0] aa, bb, a_got, b_got;
+
+        nrd     = 0;
+        wk_cmds = 0;
+        wk_bad  = 0;
+        wk_on   = 1'b1;
+
+        for (p = 0; p < 2; p = p+1)
+            for (b = 2; b < 32; b = b+1) begin
+                aa = (p == 0) ? (32'h1 << b) : (~(32'h1 << b) & 32'hFFFF_FFFC);
+                bb = (p == 0) ? (~(32'h1 << b) & 32'hFFFF_FFFC) : (32'h1 << b);
+                wk_note(aa);
+                wk_note(bb);
+                fork
+                    begin ahb_a_read(aa); #1; a_idle; ahb_a_data(a_got); chk_a(aa[MEM_ADDRW+1:2], a_got, "T15 A walk"); end
+                    begin ahb_b_read(bb); #1; b_idle; ahb_b_data(b_got); chk_b(bb[MEM_ADDRW+1:2], b_got, "T15 B walk"); end
+                join
+                nrd = nrd + 2;
+            end
+
+`ifndef FUSED_FIXED_B_PRIO
+        aa = 32'h1 << 2;
+        bb = ~(32'h1 << 2) & 32'hFFFF_FFFC;
+        wk_note(aa);
+        wk_note(bb);
+        fork
+            begin ahb_a_read(aa); end
+            begin ahb_b_read(bb); end
+        join
+        for (b = 2; b < 32; b = b+1) begin
+            aa = 32'h1 << b;
+            bb = ~(32'h1 << b) & 32'hFFFF_FFFC;
+            if (b < 31) begin
+                wk_note(32'h1 << (b+1));
+                wk_note(~(32'h1 << (b+1)) & 32'hFFFF_FFFC);
+            end
+            fork
+                begin ahb_a_data(a_got); chk_a(aa[MEM_ADDRW+1:2], a_got, "T15 A pipelined walk"); end
+                begin if (b < 31) ahb_a_read(32'h1 << (b+1)); else begin #1; a_idle; end end
+                begin ahb_b_data(b_got); chk_b(bb[MEM_ADDRW+1:2], b_got, "T15 B pipelined walk"); end
+                begin if (b < 31) ahb_b_read(~(32'h1 << (b+1)) & 32'hFFFF_FFFC); else begin #1; b_idle; end end
+            join
+            nrd = nrd + 2;
+        end
+        #1; a_idle; b_idle;
+`endif
+
+        repeat(2) @(posedge free_clk); #1;
+        wk_on = 1'b0;
+        if (wk_cmds < nrd) begin
+            $display("ERROR [T15]: %0d ROM commands for %0d walking reads  (%0t ns)", wk_cmds, nrd, $time);
+            error = error + 1;
+        end else if (wk_bad == 0)
+            $display("PASS  [T15]: %0d walking reads, %0d ROM commands, every one at a presented haddr[31:2]  (%0t ns)",
+                     nrd, wk_cmds, $time);
+    end
+
+    // =======================================================================
     // END OF TEST
     // =======================================================================
     repeat(4) @(posedge free_clk);
@@ -989,5 +1114,16 @@ initial begin
     $finish;
 
 end // initial
+
+`ifdef ARV_COV_RESET_ZERO
+// Coverage counts start once reset is released: the Verilator coverage flow starts
+// every flop at 1 so the asynchronous resets see an edge, and the reset driving them
+// to 0 would otherwise count as a toggle of every bit.
+initial begin
+    wait (hresetn === 1'b0);
+    @(posedge hresetn);
+    $c("Verilated::threadContextp()->coveragep()->zero();");
+end
+`endif
 
 endmodule // tb_ahb_fused_rom_ctrl

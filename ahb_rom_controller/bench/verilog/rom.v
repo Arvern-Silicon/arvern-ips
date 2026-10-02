@@ -45,21 +45,25 @@ input                 rom_clk_i;     // ROM clock
 
 reg            [31:0] mem [0:(MEM_SIZE/4)-1];
 reg   [MEM_ADDRW-1:0] rom_addr_reg;
+reg                   rom_rd_q;      // the last edge sampled a read command
 
-wire           [31:0] mem_val = mem[rom_addr_i];
-   
 initial
   begin
     rom_addr_reg = {MEM_ADDRW{1'b0}};
+    rom_rd_q     = 1'b0;
   end
 
 always @(posedge rom_clk_i)
-  if (~rom_cen_i & rom_addr_i<(MEM_SIZE/4))
-    begin
+  begin
+    rom_rd_q <= ~rom_cen_i;
+    if (~rom_cen_i)
       rom_addr_reg <= rom_addr_i;
-    end
+  end
 
-assign rom_dout_o = mem[rom_addr_reg];
+// Data is defined only in the cycle after a read command; any other cycle
+// returns a poison word, so a controller that forwards rom_dout_o outside its
+// read data phase is caught.
+assign rom_dout_o = rom_rd_q ? mem[rom_addr_reg] : 32'hBAD0_BAD0;
 
 
 endmodule // rom

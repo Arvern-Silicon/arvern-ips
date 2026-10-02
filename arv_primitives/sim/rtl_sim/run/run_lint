@@ -1,0 +1,29 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Script:    run_lint
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : run_lint
+# Module Description : Verilator -Wall lint of every arv_primitives module, each as its
+#                      own top, arv_reset_gen in both LF_GATE_EN settings. waivers.vlt
+#                      waives arv_cgate's intentional latch.
+#----------------------------------------------------------------------------
+
+cd "$(dirname "$0")"
+rtl=../../../rtl/verilog
+fail=0
+for spec in arv_ipdff arv_ipdff_sinit arv_synchronizer arv_cgate arv_and arv_or \
+            "arv_reset_gen:-GLF_GATE_EN=1" "arv_reset_gen:-GLF_GATE_EN=0" arv_osc_ctrl; do
+    top="${spec%%:*}"; g=""
+    [ "$spec" != "$top" ] && g="${spec#*:}"
+    out=$(verilator --lint-only -Wall waivers.vlt $g $rtl/*.v --top-module $top 2>&1 | grep "%")
+    if [ -z "$out" ]; then printf "  %-36s PASS\n" "$spec"; else printf "  %-36s FAIL\n%s\n" "$spec" "$out"; fail=1; fi
+done
+exit $fail

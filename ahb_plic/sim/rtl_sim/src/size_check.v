@@ -11,12 +11,10 @@
 //----------------------------------------------------------------------------
 // File Name          : size_check
 // Module Description : Non-word (byte / half-word) accesses must be denied with
-//                      an AHB ERROR -- dph_size_ok = (dph_size == 3'b010)
-//                      (ahb_plic.v:238). Every existing test uses word accesses
-//                      only, so the size-denial path was never stimulated; in
-//                      the priv_off config the size check is the SOLE denial
-//                      mechanism. A too-permissive size decode would be
-//                      invisible. Valid word access is checked as the control.
+//                      an AHB ERROR (dph_size_ok = dph_size == 3'b010). In the
+//                      priv_off config the size check is the sole denial mechanism,
+//                      so a too-permissive size decode is caught here. A valid word
+//                      access is checked as the control.
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE  32'h00400000

@@ -38,8 +38,8 @@ initial
       ahb_write(1, MACHINE, 32'h00404004, 32'hCAFEF00D, 2, OK);
       ahb_read (1, MACHINE, 32'h00404004, 32'hCAFEF00D, 2, 1, OK);
 
-      // With NUM_HARTS=1 the address 0x4008/0x400C are MTIME_LO/HI - reads
-      // launch a CDC roundtrip (LO) and return the buffered HI; values are
+      // With NUM_HARTS=1 the address 0x4008/0x400C are MTIME_LO/HI - LO returns
+      // the mirror and latches its upper half, HI returns it; values are
       // runtime dependent. Just confirm the address responds and check that
       // the returned value is NOT the MTIMECMP pattern we just wrote.
       $display(" ===============================================");
@@ -49,7 +49,7 @@ initial
       // Use the hclk-domain mtime_shadow probe: it is the stable register
       // that latches the 64-bit snapshot returned by the LO read, so it is
       // safe to sample after the AHB task returns.
-      ahb_read(1, MACHINE, 32'h00404008, 32'h00000000, 2, 0, OK);
+      ahb_read(1, MACHINE, 32'h0040BFF8, 32'h00000000, 2, 0, OK);
       mtime_lo_sample = tb_ahb_aclint.mtime_shadow_ahb_sim[31:0];
       mtime_hi_sample = tb_ahb_aclint.mtime_shadow_ahb_sim[63:32];
       $display("INFO:  MTIME (via shadow) = 0x%h_%h %t ns",
@@ -63,8 +63,8 @@ initial
          error = error + 1;
       end
 
-      // HI read itself (no CDC; returns the buffered shadow's upper half).
-      ahb_read(1, MACHINE, 32'h0040400C, 32'h00000000, 2, 0, OK);
+      // HI read itself (returns the upper half latched by the LO read).
+      ahb_read(1, MACHINE, 32'h0040BFFC, 32'h00000000, 2, 0, OK);
 
       // Re-confirm MTIMECMP shadows are intact (the MTIME reads must not
       // disturb the shadow registers).

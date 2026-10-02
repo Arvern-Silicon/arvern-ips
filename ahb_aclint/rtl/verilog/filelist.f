@@ -14,17 +14,16 @@
 //----------------------------------------------------------------------------
 
 //=============================================================================
-// Shared building blocks (arv_common)
+// Shared building blocks (arv_primitives)
 //=============================================================================
--f ../../../arv_common/rtl/verilog/filelist.f
+-f ../../../arv_primitives/rtl/verilog/filelist.f
 
 //=============================================================================
 // Module specific modules
 //=============================================================================
-aclint_gray2bin.v
+aclint_lf_tick.v
 aclint_mtimer_count_lf.v
-aclint_mtimer_gray_sync.v
-aclint_mtimer_write_cdc.v
+aclint_mtimer_wr_shadow.v
 aclint_mtimer.v
 aclint_mswi.v
 aclint_sswi.v

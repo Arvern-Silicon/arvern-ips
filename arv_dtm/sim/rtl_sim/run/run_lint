@@ -1,0 +1,63 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Script:    run_lint (arv_dtm)
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# Lint the arv_dtm RTL with Verilator.
+#
+# The DTM has four transport toplevels (arv_dtm_jtag / arv_dtm_cjtag /
+# arv_dtm_uart / arv_dtm_i2c) and the arv_dtm wrapper that selects one; the
+# probe transports share arv_dtm_tap, the serial ones arv_dtm_cmd, all of them
+# the arv_dtm_dmi_master backend. Every toplevel is linted separately (its own
+# --top-module) so hierarchy checks (UNUSED, width propagation) are rooted at
+# the real top rather than an arbitrarily-chosen one.
+#
+# Default:  lint every toplevel at its RTL parameter defaults.
+# -sweep :  run the parameterization sweep defined in bin/rtl_configs.py
+#           (every (top, param-override) point gets its own Verilator
+#           -lint-only invocation, logs land in ./log_lint/, summary printed).
+#----------------------------------------------------------------------------
+
+set -o pipefail
+
+if [ "$1" = "-sweep" ]; then
+    exec ../bin/run_lint_sweep.py
+fi
+
+# Regenerate the flattened, deduplicated filelist (all modules resolved to
+# absolute paths; shared arv_primitives primitives pulled in once).
+../bin/flatten_filelist.py ../../../rtl/verilog/filelist.f submit_lint.f
+
+TOPS="arv_dtm_jtag arv_dtm_cjtag arv_dtm_uart arv_dtm_i2c arv_dtm"
+fail=0
+
+for top in $TOPS; do
+    echo "=================================================================="
+    echo "  Linting ${top}"
+    echo "=================================================================="
+    if verilator --lint-only -Wall -Wpedantic --top-module "${top}" \
+                 waivers_lint.vlt -f submit_lint.f ; then
+        echo "  ${top}: PASS"
+    else
+        echo "  ${top}: FAIL"
+        fail=1
+    fi
+    echo ""
+done
+
+echo "=================================================================="
+if [ "${fail}" -eq 0 ]; then
+    echo "  arv_dtm lint: ALL ${TOPS// /, } PASS"
+else
+    echo "  arv_dtm lint: FAILURES above"
+fi
+echo "=================================================================="
+
+exit ${fail}

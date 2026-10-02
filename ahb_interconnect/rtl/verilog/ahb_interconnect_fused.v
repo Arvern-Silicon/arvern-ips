@@ -46,6 +46,7 @@ module  ahb_interconnect_fused (
     m_nx_haddr_i,
     m_nx_hauser_i,
     m_nx_hburst_i,
+    m_nx_hmaster_i,
     m_nx_hmastlock_i,
     m_nx_hprot_i,
     m_nx_hsize_i,
@@ -104,19 +105,25 @@ module  ahb_interconnect_fused (
 
 // PARAMETERs
 //======================================
-parameter                          NR_M         = 2;                       // Number of non-executable AHB Managers
-parameter                          NR_S_X_ROM   = 1;                       // Number of fused ROM controllers (low decoder bits)
-parameter                          NR_S_X_SRAM  = 1;                       // Number of fused SRAM controllers (high decoder bits)
-parameter                          NR_S_NX      = 3;                       // Number of AHB Subordinates in non-executable space
-parameter                          HAUSER_W     = 1;                       // Width of the HAUSER bus (min value is 1)
-parameter [0:0]                    FIXED_B_PRIO = 1'b0;                    // Arbitration scheme for ALL fused ROM/SRAM controllers:
-                                                                           //   1'b0 = round-robin (toggle priority, default)
-                                                                           //   1'b1 = fixed Port-B priority (data bus wins;
-                                                                           //          removes a_hsel_i from the memory-address
-                                                                           //          mux fan-in for tighter timing).
-parameter                          ASYNC_RST_EN = 1'b1;                    // 1=async active-low reset, 0=synchronous reset
-localparam                         NR_S_X       = NR_S_X_ROM+NR_S_X_SRAM;  // Total number of executable subordinates
-localparam                         NR_S         = NR_S_X+NR_S_NX;          // Total number of AHB Subordinates
+parameter                          NR_M              = 2;                       // Number of non-executable AHB Managers
+parameter                          NR_S_X_ROM        = 1;                       // Number of fused ROM controllers (low decoder bits)
+parameter                          NR_S_X_SRAM       = 1;                       // Number of fused SRAM controllers (high decoder bits)
+parameter                          NR_S_NX           = 3;                       // Number of AHB Subordinates in non-executable space
+parameter                          HAUSER_W          = 1;                       // Width of the HAUSER bus (min value is 1)
+parameter             [4*NR_M-1:0] M_NX_HMASTER_ID   = {4*NR_M{1'b0}};          // HMASTER ID of each non-executable manager (4 bits each); all-zero: manager i gets ID i+1
+parameter             [4*NR_M-1:0] M_NX_HMASTER_TAG  = {4*NR_M{1'b0}};          // m_nx_hmaster_i bits each manager may OR into its ID
+parameter                    [0:0] FIXED_B_PRIO      = 1'b0;                    // Arbitration scheme for ALL fused ROM/SRAM controllers:
+                                                                                //   1'b0 = round-robin (toggle priority, default)
+                                                                                //   1'b1 = fixed Port-B priority (data bus wins;
+                                                                                //          removes a_hsel_i from the memory-address
+                                                                                //          mux fan-in for tighter timing).
+parameter                          ASYNC_RST_EN      = 1'b1;                    // 1=async active-low reset, 0=synchronous reset
+
+localparam                         NR_S_X            = NR_S_X_ROM+NR_S_X_SRAM;  // Total number of executable subordinates
+localparam                         NR_S              = NR_S_X+NR_S_NX;          // Total number of AHB Subordinates
+localparam                         ROM_PW            = (NR_S_X_ROM < 1) ? 1 : NR_S_X_ROM; // Padded ROM count for VECTOR WIDTHS only when NR_S_X_ROM==0
+localparam              [4*15-1:0] NX_HMASTER_ID_SEQ = 60'hFEDC_BA98_7654_321;  // Default numbering (all-zero M_NX_HMASTER_ID): manager i gets ID i+1
+localparam            [4*NR_M-1:0] NX_HMASTER_ID     = (M_NX_HMASTER_ID == {4*NR_M{1'b0}}) ? NX_HMASTER_ID_SEQ[4*NR_M-1:0] : M_NX_HMASTER_ID;
 
 // AHB CLOCK & RESET
 //======================================
@@ -146,6 +153,7 @@ output wire                        m_x_hresp_o;
 input  wire          [32*NR_M-1:0] m_nx_haddr_i;
 input  wire    [HAUSER_W*NR_M-1:0] m_nx_hauser_i;
 input  wire           [3*NR_M-1:0] m_nx_hburst_i;
+input  wire           [4*NR_M-1:0] m_nx_hmaster_i;
 input  wire             [NR_M-1:0] m_nx_hmastlock_i;
 input  wire           [4*NR_M-1:0] m_nx_hprot_i;
 input  wire           [3*NR_M-1:0] m_nx_hsize_i;
@@ -174,10 +182,10 @@ output wire                 [31:0] s_x_decoder_addr_o;
 
 // FUSED ROM CONTROLLER MEMORY INTERFACES
 //=========================================
-input  wire    [32*NR_S_X_ROM-1:0] rom_dout_i;
-output wire    [30*NR_S_X_ROM-1:0] rom_addr_o;
-output wire       [NR_S_X_ROM-1:0] rom_cen_o;
-output wire       [NR_S_X_ROM-1:0] rom_clk_o;
+input  wire        [32*ROM_PW-1:0] rom_dout_i;
+output wire        [30*ROM_PW-1:0] rom_addr_o;
+output wire           [ROM_PW-1:0] rom_cen_o;
+output wire           [ROM_PW-1:0] rom_clk_o;
 
 // FUSED SRAM CONTROLLER MEMORY INTERFACES
 //=========================================
@@ -210,17 +218,20 @@ output wire          [NR_S_NX-1:0] s_nx_hwrite_o;
 //=============================================================================
 // 0)  PARAMETER RANGE CHECKS
 //=============================================================================
-// HMASTER ID array (section 2) holds 15 entries (4'h1..4'hF, 4'h0 reserved
-// for the executable manager). NR_M must fit.
+// HMASTER is 4 bits wide and 4'h0 belongs to the executable manager, so at
+// most 15 non-executable managers can hold distinct IDs. Every value a manager
+// can present (its ID OR any subset of its tag bits) must be unique and
+// non-zero: tag bits may not overlap the ID, and two managers collide when
+// their IDs agree on every bit neither of them tags.
 
 // pragma translate_off
+genvar gi, gj;
 generate
     if ((NR_M < 1) || (NR_M > 15)) begin : CHECK_NR_M
         initial $fatal(1, "ahb_interconnect_fused: NR_M (%0d) is out of range [1,15].", NR_M);
     end
-    if (NR_S_X_ROM < 1) begin : CHECK_NR_S_X_ROM
-        initial $fatal(1, "ahb_interconnect_fused: NR_S_X_ROM (%0d) must be >= 1.", NR_S_X_ROM);
-    end
+    // NR_S_X_ROM==0 is legal (ROM-less, SRAM-only executable space);
+    // NR_S_X_SRAM>=1 guarantees at least one executable subordinate.
     if (NR_S_X_SRAM < 1) begin : CHECK_NR_S_X_SRAM
         initial $fatal(1, "ahb_interconnect_fused: NR_S_X_SRAM (%0d) must be >= 1.", NR_S_X_SRAM);
     end
@@ -232,6 +243,19 @@ generate
     end
      if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "ahb_interconnect_fused: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
+    end
+    for (gi = 0; gi < NR_M; gi = gi + 1) begin : CHECK_M_NX_HMASTER
+        if (NX_HMASTER_ID[4*gi+:4] == 4'h0) begin : ID_ZERO
+            initial $fatal(1, "ahb_interconnect_fused: non-executable manager %0d M_NX_HMASTER_ID is 4'h0 (executable manager).", gi);
+        end
+        if ((NX_HMASTER_ID[4*gi+:4] & M_NX_HMASTER_TAG[4*gi+:4]) != 4'h0) begin : TAG_IN_ID
+            initial $fatal(1, "ahb_interconnect_fused: non-executable manager %0d M_NX_HMASTER_TAG overlaps its M_NX_HMASTER_ID.", gi);
+        end
+        for (gj = gi + 1; gj < NR_M; gj = gj + 1) begin : PAIR
+            if (((NX_HMASTER_ID[4*gi+:4] ^ NX_HMASTER_ID[4*gj+:4]) & ~(M_NX_HMASTER_TAG[4*gi+:4] | M_NX_HMASTER_TAG[4*gj+:4])) == 4'h0) begin : COLLISION
+                initial $fatal(1, "ahb_interconnect_fused: non-executable managers %0d and %0d can present the same HMASTER.", gi, gj);
+            end
+        end
     end
 endgenerate
 // pragma translate_on
@@ -245,8 +269,8 @@ endgenerate
 // Signals for the non-executable paths
 //-----------------------------------------------
 
-wire               [4*15-1:0] m_nx_hmaster;
-wire        [4*(15-NR_M)-1:0] m_nx_hmaster_unused;
+wire             [4*NR_M-1:0] m_nx_hmaster;
+wire             [4*NR_M-1:0] m_nx_hmaster_unused;
 
 wire                   [31:0] nx_hrdata;
 wire                          nx_hreadyout;
@@ -257,7 +281,6 @@ wire                    [2:0] nx_hburst;
 wire                    [3:0] nx_hmaster;
 wire                          nx_hmastlock;
 wire                    [3:0] nx_hprot;
-wire                          nx_hready_unused;
 wire                          nx_hsel;
 wire                    [2:0] nx_hsize;
 wire                    [1:0] nx_htrans;
@@ -308,6 +331,7 @@ wire                          nx_hclk_en_dflt_subordinate;
 //-----------------------------------------------
 
 wire                          x_dflt_decoder;
+wire             [NR_S_X-1:0] x_decoder_rd;
 wire                          x_dflt_hsel;
 wire                   [31:0] x_dflt_hrdata;
 wire                          x_dflt_hreadyout;
@@ -341,7 +365,7 @@ wire             [NR_S_X-1:0] x_hwrite_to_x;
 wire             [NR_S_X-1:0] x_hsel_to_x;
 
 wire                          x_hclk_en;
-wire         [NR_S_X_ROM-1:0] x_hclk_en_fused_rom;
+wire             [ROM_PW-1:0] x_hclk_en_fused_rom;
 wire        [NR_S_X_SRAM-1:0] x_hclk_en_fused_sram;
 wire                          x_hclk_en_subordinate_mux;
 wire                          x_hclk_en_dflt_subordinate;
@@ -359,9 +383,17 @@ wire                          x_hclk_en_dflt_subordinate;
 // 2)  AHB MANAGER MULTIPLEXOR
 //=============================================================================
 
-// HMASTER assignments for each manager
-assign m_nx_hmaster = {4'hF, 4'hE, 4'hD, 4'hC, 4'hB, 4'hA, 4'h9, 4'h8,
-                       4'h7, 4'h6, 4'h5, 4'h4, 4'h3, 4'h2, 4'h1      };  // 4'h0 is reserved for the executable manager
+// HMASTER of each non-executable manager: its ID combined with its enabled tag bits.
+// Example with NR_M = 2, manager 0 tagging on bit 3 (e.g. aRVern data_hmaster_o):
+//   M_NX_HMASTER_ID  = 8'h00  -> default IDs {2, 1}
+//   M_NX_HMASTER_TAG = 8'h08  -> manager 0 may set bit 3 (m_nx_hmaster_i[3])
+//   HMASTER: manager 0 = 4'h1 or 4'h9, manager 1 = 4'h2 (executable manager = 4'h0)
+// With explicit IDs, M_NX_HMASTER_ID = 8'h42 and M_NX_HMASTER_TAG = 8'h01 give
+// 4'h2 or 4'h3, 4'h4.
+assign m_nx_hmaster = NX_HMASTER_ID | (m_nx_hmaster_i & M_NX_HMASTER_TAG);
+
+// Bits outside M_NX_HMASTER_TAG are ignored (all of them at the default)
+assign m_nx_hmaster_unused = m_nx_hmaster_i;
 
 ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_manager_mux_inst_nx (
 
@@ -375,7 +407,7 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .m_haddr_i         ( m_nx_haddr_i             ),
     .m_hauser_i        ( m_nx_hauser_i            ),
     .m_hburst_i        ( m_nx_hburst_i            ),
-    .m_hmaster_i       ( m_nx_hmaster[4*NR_M-1:0] ),
+    .m_hmaster_i       ( m_nx_hmaster             ),
     .m_hmastlock_i     ( m_nx_hmastlock_i         ),
     .m_hprot_i         ( m_nx_hprot_i             ),
     .m_hready_i        ( m_nx_hready_o            ),
@@ -404,15 +436,12 @@ ahb_manager_mux #(.NR_M(NR_M), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_EN)) ahb_
     .hmaster_o         ( nx_hmaster               ),
     .hmastlock_o       ( nx_hmastlock             ),
     .hprot_o           ( nx_hprot                 ),
-    .hready_o          ( nx_hready_unused         ),
     .hsel_o            ( nx_hsel                  ),
     .hsize_o           ( nx_hsize                 ),
     .htrans_o          ( nx_htrans                ),
     .hwdata_o          ( nx_hwdata                ),
     .hwrite_o          ( nx_hwrite                )
 );
-
-assign m_nx_hmaster_unused = m_nx_hmaster[4*15-1:4*NR_M];
 
 
 //=============================================================================
@@ -517,7 +546,7 @@ ahb_subordinate_mux #(.NR_S(NR_S_X+1), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_E
     .hclk_en_o         ( x_hclk_en_subordinate_mux                      ),
 
 // AHB SUBORDINATE INTERFACES & ADDRESS DECODER
-    .s_decoder_i       ({x_dflt_decoder,           s_x_decoder_1hot_i  }),
+    .s_decoder_i       ({x_dflt_decoder,           x_decoder_rd        }),
 
     .s_hrdata_i        ({x_dflt_hrdata,            x_hrdata_from_x     }),
     .s_hreadyout_i     ({x_dflt_hreadyout,         x_hreadyout_from_x  }),
@@ -556,8 +585,10 @@ ahb_subordinate_mux #(.NR_S(NR_S_X+1), .HAUSER_W(HAUSER_W), .ARST_EN(ASYNC_RST_E
 );
 
 
-// Default decoder selected when all bits of the main decoder are 0
-assign x_dflt_decoder     = ~(|s_x_decoder_1hot_i);
+// The fused leaves' Port A (executable side) is read-only
+// (select the default slave in case a write is attempted on the X side)
+assign x_decoder_rd       =    s_x_decoder_1hot_i  & {NR_S_X{~m_x_hwrite_i}};
+assign x_dflt_decoder     = ~(|s_x_decoder_1hot_i) |          m_x_hwrite_i  ;
 
 // Assign address going to the decoder
 assign s_x_decoder_addr_o =  m_x_haddr_i;
@@ -650,7 +681,7 @@ genvar j;
 generate
     for (j = 0; j < NR_S_X_SRAM; j = j + 1) begin : AHB_FUSED_SRAM
 
-        localparam k = NR_S_X_ROM + j;   // slot index in executable decoder
+        localparam K = NR_S_X_ROM + j;   // slot index in executable decoder
 
         ahb_fused_sram_ctrl #(
             .FIXED_B_PRIO      ( FIXED_B_PRIO                    ),
@@ -664,28 +695,28 @@ generate
             .hclk_en_o         ( x_hclk_en_fused_sram[j]         ),
 
         // PORT A — instruction fetch (executable manager)
-            .a_haddr_i         ( x_haddr_to_x[32*k+:32]          ),
-            .a_hready_i        ( x_hready_to_x[k]                ),
-            .a_hsize_i         ( x_hsize_to_x[3*k+:3]            ),
-            .a_htrans_i        ( x_htrans_to_x[2*k+:2]           ),
-            .a_hsel_i          ( x_hsel_to_x[k]                  ),
+            .a_haddr_i         ( x_haddr_to_x[32*K+:32]          ),
+            .a_hready_i        ( x_hready_to_x[K]                ),
+            .a_hsize_i         ( x_hsize_to_x[3*K+:3]            ),
+            .a_htrans_i        ( x_htrans_to_x[2*K+:2]           ),
+            .a_hsel_i          ( x_hsel_to_x[K]                  ),
 
-            .a_hrdata_o        ( x_hrdata_from_x[32*k+:32]       ),
-            .a_hreadyout_o     ( x_hreadyout_from_x[k]           ),
-            .a_hresp_o         ( x_hresp_from_x[k]               ),
+            .a_hrdata_o        ( x_hrdata_from_x[32*K+:32]       ),
+            .a_hreadyout_o     ( x_hreadyout_from_x[K]           ),
+            .a_hresp_o         ( x_hresp_from_x[K]               ),
 
         // PORT B — data (non-executable manager)
-            .b_haddr_i         ( nx_haddr_to_x[32*k+:32]         ),
-            .b_hready_i        ( nx_hready_to_x[k]               ),
-            .b_hsize_i         ( nx_hsize_to_x[3*k+:3]           ),
-            .b_htrans_i        ( nx_htrans_to_x[2*k+:2]          ),
-            .b_hwdata_i        ( nx_hwdata_to_x[32*k+:32]        ),
-            .b_hwrite_i        ( nx_hwrite_to_x[k]               ),
-            .b_hsel_i          ( nx_hsel_to_x[k]                 ),
+            .b_haddr_i         ( nx_haddr_to_x[32*K+:32]         ),
+            .b_hready_i        ( nx_hready_to_x[K]               ),
+            .b_hsize_i         ( nx_hsize_to_x[3*K+:3]           ),
+            .b_htrans_i        ( nx_htrans_to_x[2*K+:2]          ),
+            .b_hwdata_i        ( nx_hwdata_to_x[32*K+:32]        ),
+            .b_hwrite_i        ( nx_hwrite_to_x[K]               ),
+            .b_hsel_i          ( nx_hsel_to_x[K]                 ),
 
-            .b_hrdata_o        ( nx_hrdata_from_x[32*k+:32]      ),
-            .b_hreadyout_o     ( nx_hreadyout_from_x[k]          ),
-            .b_hresp_o         ( nx_hresp_from_x[k]              ),
+            .b_hrdata_o        ( nx_hrdata_from_x[32*K+:32]      ),
+            .b_hreadyout_o     ( nx_hreadyout_from_x[K]          ),
+            .b_hresp_o         ( nx_hresp_from_x[K]              ),
 
         // SRAM MACRO
             .sram_dout_i       ( sram_dout_i[32*j+:32]           ),
@@ -735,23 +766,41 @@ assign  hclk_en_o         =  nx_hclk_en | x_hclk_en      ;
 // raise verilator UNUSEDSIGNAL warnings.  Reducing them into a sink wire keeps
 // the lint clean without a global waiver.
 
-wire _unused_ok = &{1'b0,
-                    nx_hburst_to_x,
-                    nx_hmaster_to_x,
-                    nx_hmastlock_to_x,
-                    nx_hprot_to_x,
-                    nx_hauser_to_x,
-                    nx_hsize_to_x  [3*NR_S_X_ROM-1:0],
-                    nx_hwdata_to_x[32*NR_S_X_ROM-1:0],
-                    x_hauser_to_x,
-                    x_hburst_to_x,
-                    x_hmaster_to_x,
-                    x_hmastlock_to_x,
-                    x_hprot_to_x,
-                    x_hwdata_to_x,
-                    x_hwrite_to_x,
-                    x_hsize_to_x   [3*NR_S_X_ROM-1:0],
-                    1'b0};
+wire ok_as_unused = |{1'b0,
+                      nx_hburst_to_x,
+                      nx_hmaster_to_x,
+                      nx_hmastlock_to_x,
+                      nx_hprot_to_x,
+                      nx_hauser_to_x,
+                      x_hauser_to_x,
+                      x_hburst_to_x,
+                      x_hmaster_to_x,
+                      x_hmastlock_to_x,
+                      x_hprot_to_x,
+                      x_hwdata_to_x,
+                      x_hwrite_to_x,
+                      1'b0};
+
+// ROM-slot handling. The ROM slots ignore hsize/hwdata (read-only), and rom_dout_i is
+// consumed only by a present ROM controller -- so those ROM-slot bits are unused and get
+// sunk ONLY when ROM slots exist (keeping the [3*NR_S_X_ROM-1:0] slices legal). With
+// NR_S_X_ROM==0 there are no ROM slots: the padded rom_* outputs and the rom hclk-en hook
+// are driven off, and rom_dout_i is sunk instead.
+generate
+    if (NR_S_X_ROM >= 1) begin : ROM_UNUSED_SINK
+        wire rom_unused_ok = |{1'b0,
+                               nx_hsize_to_x  [3*NR_S_X_ROM-1:0],
+                               nx_hwdata_to_x[32*NR_S_X_ROM-1:0],
+                               x_hsize_to_x   [3*NR_S_X_ROM-1:0],
+                               1'b0};
+    end else begin : ROM_ABSENT_TIEOFF
+        assign rom_addr_o          = {30*ROM_PW{1'b0}};
+        assign rom_cen_o           = {ROM_PW{1'b1}};                     // active-low: park the (absent) macro disabled
+        assign rom_clk_o           = {ROM_PW{1'b0}};
+        assign x_hclk_en_fused_rom = {ROM_PW{1'b0}};
+        wire   rom_dout_unused_ok  = |{1'b0, rom_dout_i, 1'b0};
+    end
+endgenerate
 
 
 endmodule // ahb_interconnect_fused

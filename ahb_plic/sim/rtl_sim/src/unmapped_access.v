@@ -14,8 +14,9 @@
 //                      outside the documented windows must RAZ/WI without
 //                      raising hresp. Covers the gap between enable and
 //                      target windows, priority slots above NUM_SOURCES,
-//                      enable words above NUM_SOURCES, and target stride
-//                      slots beyond NUM_CONTEXTS.
+//                      enable words above NUM_SOURCES, pending words above
+//                      NUM_SOURCES (word 32 must not alias onto word 0), and
+//                      target stride slots beyond NUM_CONTEXTS.
 //----------------------------------------------------------------------------
 
 // Base of the PLIC slave window (matches hsel decode in the TB).
@@ -64,6 +65,18 @@ initial
       //---------------------------------------------------------------
       //------------------ END OF TEST --------------------------------
       //---------------------------------------------------------------
+      $display(" ===============================================");
+      $display("|    PENDING WORD ABOVE NUM_SOURCES (RAZ)       |");
+      $display(" ===============================================");
+
+      // Source 1 pending, so word 0 reads non-zero. Word 32 (offset 0x80) has
+      // the same low index bits and must still read 0.
+      tb_ahb_plic.irq_src[1] = 1'b1;
+      repeat(3) @(posedge free_clk);
+      ahb_read (1, MACHINE, `PLIC_BASE + 32'h00001000, 32'h0000_0002, 2, 1, OK);
+      ahb_read (1, MACHINE, `PLIC_BASE + 32'h00001080, 32'h0000_0000, 2, 1, OK);
+      tb_ahb_plic.irq_src[1] = 1'b0;
+
       repeat(21) @(posedge free_clk);
       $display("");
       stimulus_done = 1;

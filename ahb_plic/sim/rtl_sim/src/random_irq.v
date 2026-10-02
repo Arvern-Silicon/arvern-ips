@@ -10,16 +10,15 @@
 // Full license text is available in the LICENSE file at the repository root.
 //----------------------------------------------------------------------------
 // File Name          : random_irq
-// Module Description : Constrained-random PLIC stimulus. The suite was
-//                      directed-only (the `SEED was seeded into $urandom but no
-//                      stimulus consumed it), so re-runs explored nothing new.
+// Module Description : Constrained-random PLIC stimulus.
 //                      This randomizes priorities, enables, threshold, and the
 //                      per-source irq_src vector, interleaving random
-//                      claim/complete handshakes. Correctness is enforced
+//                      claim/complete handshakes on the claimed ID, so sources
+//                      are completed and re-triggered. Correctness is enforced
 //                      CONTINUOUSLY by the always-on reference-model scoreboard
-//                      (SB-EIP / SB-TOP), so every random state is checked
-//                      without hand-coding expected values. A fresh seed each
-//                      run_sweep invocation now explores new orderings.
+//                      (SB-EIP / SB-TOP / SB-GW), so every random state is
+//                      checked without hand-coding expected values. Each run
+//                      takes a fresh seed, so re-runs explore new orderings.
 //----------------------------------------------------------------------------
 
 `define PLIC_BASE     32'h00400000
@@ -65,8 +64,12 @@ initial
 
          // Occasionally claim + complete whatever the arbiter currently offers.
          if (($urandom & 32'h3) == 32'h0) begin
-            ahb_read(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'd0, 2, 0, OK);
-            claim_id = tb_ahb_plic.dut.tgt_top_id[0];
+            // Non-blocking: return in the claim's data phase and take the ID
+            // the PLIC actually returned (the arbiter has moved on after it).
+            ahb_read(0, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, 32'd0, 2, 0, OK);
+            @(negedge free_clk);
+            claim_id = hrdata;
+            @(posedge free_clk);
             if (claim_id != 0) begin
                // Completing requires the source still enabled (it is).
                ahb_write(1, MACHINE, `PLIC_BASE + `TARGET_BASE + 32'h4, claim_id, 2, OK);

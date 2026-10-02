@@ -11,7 +11,7 @@
 //----------------------------------------------------------------------------
 // File Name          : ahb_error_p2
 // Module Description : Cycle-accurate check of the two-cycle AHB-Lite ERROR
-//                      protocol (ahb_aclint.v:295-307). The standard BFM
+//                      protocol (ahb_aclint.v, section 9.b). The standard BFM
 //                      samples hresp only ONCE, so a regression to a 1-cycle
 //                      error (hresp drops in P2) or a wrong hreadyout shape
 //                      would pass. A denied access must drive:
@@ -83,6 +83,129 @@ initial
          $display("ERROR: post-error -- hresp still %b (error not 2 cycles exactly) %t ns", hresp, $time);
          error = error + 1;
       end
+
+      $display("");
+      $display(" ===============================================");
+      $display("|   AHB : A NEW TRANSFER DURING THE P2 CYCLE    |");
+      $display(" ===============================================");
+
+      // HREADYOUT is high again in P2, so AHB-Lite lets the manager present the
+      // next address phase there. err_state must retire to IDLE on that same
+      // edge: a second denied access then gets its OWN full two-cycle error
+      // rather than inheriting a half-finished one, and a legal access is not
+      // contaminated by the error still being reported when it was issued.
+
+      // --- denied, then a second denied presented in P2 ---
+      haddr  = 32'h00400000;
+      htrans = 2'b10;
+      hwrite = 1'b0;
+      hprot  = 4'h2;
+      hsmode = 1'b1;
+      hsize  = 3'b010;
+
+      @(posedge free_clk);
+      #1;
+      haddr  = 32'h00000000;      // idle through P1: the address is not accepted anyway
+      htrans = 2'b00;
+      hprot  = 4'h0;
+      hsmode = 1'b0;
+
+      if (!((hresp === 1'b1) && (hreadyout === 1'b0))) begin
+         $display("ERROR: pass 2 P1 -- expected hresp=1/hreadyout=0, got %b/%b %t ns",
+                  hresp, hreadyout, $time);
+         error = error + 1;
+      end
+
+      @(posedge free_clk);
+      #1;
+      if (!((hresp === 1'b1) && (hreadyout === 1'b1))) begin
+         $display("ERROR: pass 2 P2 -- expected hresp=1/hreadyout=1, got %b/%b %t ns",
+                  hresp, hreadyout, $time);
+         error = error + 1;
+      end
+
+      // Present the SECOND denied access in this P2 cycle.
+      haddr  = 32'h00404000;      // MTIMECMP_LO[0] -- also an M-only window
+      htrans = 2'b10;
+      hwrite = 1'b0;
+      hprot  = 4'h2;
+      hsmode = 1'b1;
+      hsize  = 3'b010;
+
+      @(posedge free_clk);
+      #1;
+      haddr  = 32'h00000000;
+      htrans = 2'b00;
+      hprot  = 4'h0;
+      hsmode = 1'b0;
+
+      if ((hresp === 1'b1) && (hreadyout === 1'b0)) begin
+         $display("PASS:  transfer issued in P2 gets its own P1 (stall) %t ns", $time);
+      end else begin
+         $display("ERROR: transfer issued in P2 -- expected a fresh P1 (hresp=1/hreadyout=0), got %b/%b %t ns",
+                  hresp, hreadyout, $time);
+         error = error + 1;
+      end
+
+      @(posedge free_clk);
+      #1;
+      if ((hresp === 1'b1) && (hreadyout === 1'b1)) begin
+         $display("PASS:  ... and its own P2 (complete) %t ns", $time);
+      end else begin
+         $display("ERROR: transfer issued in P2 -- expected its own P2, got %b/%b %t ns",
+                  hresp, hreadyout, $time);
+         error = error + 1;
+      end
+
+      @(posedge free_clk);
+      #1;
+      if (hresp === 1'b0) begin
+         $display("PASS:  back-to-back errors recovered -- hresp low %t ns", $time);
+      end else begin
+         $display("ERROR: hresp still %b after the second error completed %t ns", hresp, $time);
+         error = error + 1;
+      end
+
+      // --- denied, then a LEGAL access presented in P2 ---
+      haddr  = 32'h00400000;
+      htrans = 2'b10;
+      hwrite = 1'b0;
+      hprot  = 4'h2;
+      hsmode = 1'b1;
+      hsize  = 3'b010;
+
+      @(posedge free_clk);
+      #1;
+      haddr  = 32'h00000000;
+      htrans = 2'b00;
+      hprot  = 4'h0;
+      hsmode = 1'b0;
+
+      @(posedge free_clk);
+      #1;                          // P2 -- issue an allowed M-mode read here
+      haddr  = 32'h00400000;
+      htrans = 2'b10;
+      hwrite = 1'b0;
+      hprot  = 4'h2;
+      hsmode = 1'b0;               // {hprot[1],hsmode} = 1,0 -> Machine
+      hsize  = 3'b010;
+
+      @(posedge free_clk);
+      #1;
+      haddr  = 32'h00000000;
+      htrans = 2'b00;
+      hprot  = 4'h0;
+
+      if ((hresp === 1'b0) && (hreadyout === 1'b1)) begin
+         $display("PASS:  legal transfer issued in P2 completes OK, uncontaminated %t ns", $time);
+      end else begin
+         $display("ERROR: legal transfer issued in P2 -- expected hresp=0/hreadyout=1, got %b/%b %t ns",
+                  hresp, hreadyout, $time);
+         error = error + 1;
+      end
+
+      @(posedge free_clk);
+      #1;
 
       // Sanity: a legal M-mode access right after must still succeed OK.
       ahb_read(1, MACHINE, 32'h00400000, 32'h00000000, 2, 1, OK);

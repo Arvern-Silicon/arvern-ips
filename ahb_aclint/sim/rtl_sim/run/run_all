@@ -7,6 +7,9 @@
 if [ "$1" = "-sweep" ]; then
     exec ../bin/run_sweep.py
 fi
+if [ "$1" = "-cov" ]; then
+    exec ../bin/runcov
+fi
 
 # Disable waveform dumping
 SIMULATION_NODUMP=1
@@ -23,6 +26,16 @@ export SIMULATION_NODUMP
 VERILOG_SIMULATOR=iverilog
 export VERILOG_SIMULATOR
 
+
+# Read the default-config test list once, up front. An empty list here would
+# make the regression "pass" without running anything, so it is a hard error.
+TESTS=$(python3 -c "import sys; sys.path.insert(0,'../bin'); from sim_configs import DEFAULT_TESTS; print(' '.join(DEFAULT_TESTS))" 2>&1)
+if [ $? -ne 0 ] || [ -z "$TESTS" ]; then
+    echo "ERROR: could not read DEFAULT_TESTS from ../bin/sim_configs.py"
+    echo "$TESTS"
+    exit 1
+fi
+echo "Running $(echo $TESTS | wc -w | tr -d ' ') tests from bin/sim_configs.py DEFAULT_TESTS"
 
 # Argument specifies number of regression loops
 if [ $# -ne 1 ]; then
@@ -43,18 +56,19 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     LOG_DIR=./log/$ii
     mkdir -p $LOG_DIR
 
-    # ACLINT block-level test list
-    ../bin/runsim mswi_basic                  | tee $LOG_DIR/mswi_basic.log
-    ../bin/runsim mtimer_cmp_writeback        | tee $LOG_DIR/mtimer_cmp_writeback.log
-    ../bin/runsim mtimer_atomic_read          | tee $LOG_DIR/mtimer_atomic_read.log
-    ../bin/runsim mtimer_wake                 | tee $LOG_DIR/mtimer_wake.log
-    ../bin/runsim sswi_basic                  | tee $LOG_DIR/sswi_basic.log
-    ../bin/runsim unmapped_access             | tee $LOG_DIR/unmapped_access.log
-    ../bin/runsim priv_check                  | tee $LOG_DIR/priv_check.log
-
+    # Test list comes from bin/sim_configs.py (DEFAULT_TESTS), the same source
+    # run_sweep.py uses. Do NOT hardcode it here: a duplicated list drifts, and a
+    # regression that silently runs a subset still prints a confident PASS.
+    for tt in $TESTS; do
+        ../bin/runsim $tt                     | tee $LOG_DIR/$tt.log
+    done
 
     # Report regression results
     ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log
+
+    # Functional coverage for this (single-config) run. Reported, not gated:
+    # some mandatory bins need a parameterization only the sweep builds.
+    ../bin/cov_report $LOG_DIR                | tee -a $LOG_DIR/../summary.$ii.log
 
 done
 
