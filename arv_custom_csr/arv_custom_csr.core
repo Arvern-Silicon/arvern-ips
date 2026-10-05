@@ -14,14 +14,14 @@ CAPI=2:
 # for the usage pattern.  Native sim flow is under sim/rtl_sim/.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:arv_custom_csr:1.0
+name: arvern:ips:arv_custom_csr:1.0.0
 description: Custom-CSR peripheral for the arvern CPU (read-only / read-write CSR primitives).
 
 filesets:
   rtl:
     file_type: verilogSource
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
     files:
       - rtl/verilog/arv_ccsr_rdwr.v
       - rtl/verilog/arv_ccsr_rdonly.v

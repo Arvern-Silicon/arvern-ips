@@ -43,3 +43,6 @@ arv_scope/*
 */lint/vc_static/results
 */lint/vc_static/results_sweep
 */lint/vc_static/*_d
+
+# Not released yet (next IP release)
+ahb_gpio/

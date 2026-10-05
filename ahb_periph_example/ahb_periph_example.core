@@ -14,7 +14,7 @@ CAPI=2:
 # for the usage pattern.  Native sim flow is under sim/rtl_sim/.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_periph_example:1.0
+name: arvern:ips:ahb_periph_example:1.0.1
 description: Example AHB-Lite peripheral with mdeleg / privilege-mode handling.
 
 filesets:
@@ -23,7 +23,7 @@ filesets:
     files:
       - rtl/verilog/ahb_periph_example.v
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

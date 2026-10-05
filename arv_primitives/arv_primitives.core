@@ -12,10 +12,10 @@ CAPI=2:
 # ----------------------------------------------------------------------------
 # FuseSoC manifest for the arv_primitives library.
 # Other aRVern IPs depend on this via:
-#   depend: [arvern:ips:arv_primitives:1.0]
+#   depend: [arvern:ips:arv_primitives:1.0.0]
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:arv_primitives:1.0
+name: arvern:ips:arv_primitives:1.0.0
 description: Technology-mappable primitives (flops, synchroniser, clock gate, gates) shared across aRVern system IPs.
 
 filesets:

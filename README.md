@@ -29,7 +29,7 @@ More IPs will land here as the ecosystem grows.
 
 ## Release notes
 
-Latest release: **1.0.0**.
+Latest release: **1.0.1**.
 
 What changed in each release, and how to upgrade: [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -43,8 +43,17 @@ Each IP follows a uniform layout:
 ├── bench/verilog/           Testbench sources
 ├── doc/                     Markdown documentation
 ├── sim/rtl_sim/             Simulation flow (run/, src/, bin/)
+├── sw/                      C driver (include/, src/), where the IP has one
 └── synthesis/synopsys/      Synthesis flow (Design Compiler)
 ```
+
+**C drivers.** `ahb_aclint`, `ahb_plic` and `ahb_periph_example` ship a register map
+(`<ip>_regs.h`) and a driver in `sw/`: C11, no `malloc`, RV32E-clean. Each touches only
+its own IP's registers and stands alone; for interrupt handling it pairs with the trap
+layer of the [aRVern core support library](https://github.com/Arvern-Silicon/arvern/tree/main/sw),
+and the core's
+[software guide](https://github.com/Arvern-Silicon/arvern/blob/main/doc/software_guide.md#14-c-support-library-and-ip-drivers)
+shows them working together. Each `sw/README.md` lists the functions and their behaviour.
 
 The shared primitives library `arv_primitives/` holds the six modules every other IP
 is built from — and is the **single place to apply technology or physical-design

@@ -14,7 +14,7 @@ CAPI=2:
 # for the usage pattern.  Native sim flow is under sim/rtl_sim/.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_sram_controller:1.0
+name: arvern:ips:ahb_sram_controller:1.0.0
 description: AHB-Lite SRAM controller for the arvern SoC family.
 
 filesets:
@@ -23,7 +23,7 @@ filesets:
     files:
       - rtl/verilog/ahb_sram_controller.v
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

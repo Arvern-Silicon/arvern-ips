@@ -15,7 +15,7 @@ CAPI=2:
 # bridging a 4-wire TAP to the arvern Debug Module Interface (DMI) bus.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:arv_dtm:1.0
+name: arvern:ips:arv_dtm:1.0.1
 description: RISC-V Debug Spec 1.0 JTAG Debug Transport Module (TAP + dtmcs/dmi + TCK<->hclk DMI CDC).
 
 filesets:
@@ -32,7 +32,7 @@ filesets:
       - rtl/verilog/arv_dtm_i2c.v              # I2C  DTM toplevel
       - rtl/verilog/arv_dtm.v                  # Selectable transport wrapper (DTM_TYPE, generate)
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

@@ -19,7 +19,7 @@ CAPI=2:
 # their own tool).
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_interconnect:1.0
+name: arvern:ips:ahb_interconnect:1.0.0
 description: "AHB-Lite multi-manager / multi-subordinate fabric (3 variants: generic / hiperf / fused)."
 
 filesets:
@@ -37,7 +37,7 @@ filesets:
       - rtl/verilog/ahb_interconnect_hiperf.v
       - rtl/verilog/ahb_interconnect_fused.v
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

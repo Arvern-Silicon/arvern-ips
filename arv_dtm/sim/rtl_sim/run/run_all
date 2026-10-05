@@ -101,6 +101,8 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     $RUNSIM dmi_hardreset_race -dtm cjtag    | tee $LOG_DIR/dmi_hardreset_race_cjtag.log
     $RUNSIM dmi_hardreset_fail_race          | tee $LOG_DIR/dmi_hardreset_fail_race.log
     $RUNSIM dmi_hardreset_fail_race -dtm cjtag | tee $LOG_DIR/dmi_hardreset_fail_race_cjtag.log
+    $RUNSIM dmi_reset_fail_race              | tee $LOG_DIR/dmi_reset_fail_race.log
+    $RUNSIM dmi_reset_fail_race -dtm cjtag   | tee $LOG_DIR/dmi_reset_fail_race_cjtag.log
     $RUNSIM jtag_pause_long                  | tee $LOG_DIR/jtag_pause_long.log
     $RUNSIM jtag_capture_exit -dtm jtag      | tee $LOG_DIR/jtag_capture_exit.log
     $RUNSIM jtag_capture_exit -dtm cjtag     | tee $LOG_DIR/jtag_capture_exit_cjtag.log
@@ -169,7 +171,7 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
              cjtag_act_cp_rso cjtag_act_long cjtag_escape_align cjtag_cold_attach \
              cjtag_reset_assert cjtag_first_packet cjtag_bad_actcode cjtag_bad_scnfmt \
              cjtag_escape_5edge dmi_capture_addr dmi_fail_capture_sweep cjtag_escape_inflight \
-             dmi_hardreset_race dmi_hardreset_fail_race cjtag_escape_reset_high \
+             dmi_hardreset_race dmi_hardreset_fail_race dmi_reset_fail_race cjtag_escape_reset_high \
              cjtag_scan_mode cjtag_escape_saturate dmi_walk jtag_capture_exit \
              unselected_pins; do
         SIM_EXTRA_DEFINES="CJHALF=4" $RUNSIM $t -dtm cjtag | tee $LOG_DIR/${t}_cjtag8x.log

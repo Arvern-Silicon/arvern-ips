@@ -14,7 +14,7 @@ CAPI=2:
 # for the usage pattern.  Native sim flow is under sim/rtl_sim/.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_aclint:1.0
+name: arvern:ips:ahb_aclint:1.0.1
 description: RISC-V ACLINT 1.0-rc4 AHB-Lite slave (MSWI / MTIMER + LF wake / SSWI; per-hart M+S IRQs).
 
 filesets:
@@ -29,7 +29,7 @@ filesets:
       - rtl/verilog/aclint_sswi.v
       - rtl/verilog/ahb_aclint.v
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

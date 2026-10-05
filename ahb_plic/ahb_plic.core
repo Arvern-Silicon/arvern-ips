@@ -14,7 +14,7 @@ CAPI=2:
 # for the usage pattern.  Native sim flow is under sim/rtl_sim/.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_plic:1.0
+name: arvern:ips:ahb_plic:1.0.1
 description: RISC-V PLIC 1.0 AHB-Lite slave (parameterizable sources / contexts, M+S delivery).
 
 filesets:
@@ -27,7 +27,7 @@ filesets:
       - rtl/verilog/plic_target.v
       - rtl/verilog/ahb_plic.v
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
 
 targets:
   default: &default

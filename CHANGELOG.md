@@ -7,8 +7,40 @@ All notable changes to the aRVern IP library are listed here. Versions follow
 
 | Version | Date |
 |---|---|
+| [1.0.1](#v1.0.1) | Oct 5, 2026 |
 | [1.0.0](#v1.0.0) | Oct 2, 2026 |
 | [0.1.0-preview](#v0.1.0-preview) | Jun 24, 2026 |
+
+<a id="v1.0.1"></a>
+
+## 1.0.1
+
+Adds C drivers for the ACLINT, the PLIC and the example peripheral. Bug fix for the DTM. No port, parameter or register change.
+
+### Added
+
+- `ahb_aclint/sw`, `ahb_plic/sw`, `ahb_periph_example/sw`: register maps and drivers in C
+  (no `malloc`, RV32E-clean).
+
+### Fixed
+
+- **arv_dtm (JTAG and cJTAG).** A `dmireset` on the TCK edge where an outstanding DMI
+  operation completed with `PSLVERR` cleared that failure: the next scan reported success. The
+  failure now stands, as for a failure held behind busy. The UART and I2C transports have no
+  sticky error state and were not affected.
+
+### Documentation
+
+- **C drivers.** The repository README lists the IPs that ship a driver and how they pair
+  with the core support library.
+- **ahb_aclint.** A two-store MTIME write shows the mixed value to the read view and to MTIP
+  between the stores; the guide now gives the store order that keeps it from asserting MTIP.
+
+### Upgrading from 1.0.0
+
+Drop-in replacement. FuseSoC core versions follow their changes: `ahb_aclint`, `ahb_plic`,
+`ahb_periph_example` and `arv_dtm` are `1.0.1`; the unchanged cores, `arv_primitives`
+included, are `1.0.0`.
 
 <a id="v1.0.0"></a>
 

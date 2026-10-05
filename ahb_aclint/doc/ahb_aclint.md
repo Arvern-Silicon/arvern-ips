@@ -216,12 +216,15 @@ Four rules for firmware:
    a separate snapshot and never disturbs the MMIO shadow; on a single hart the
    only hazard is an ISR that reads `MTIME_LO` between main code's two reads.
 
-3. **A 64-bit write is atomic; a half-write touches only its own half.** Both
-   halves share one shadow and one load request, so a back-to-back LO/HI pair
-   reaches the counter as a single load — there is no "write HI first" rule and
-   no intermediate-match hazard. Writing one half alone loads only that half; the
-   other keeps counting, apart from holding still for the single LF edge the load
-   consumes.
+3. **A 64-bit write is atomic at the counter; a half-write touches only its own
+   half.** Both halves share one shadow and one load request, so a back-to-back
+   LO/HI pair reaches the counter as a single load. Writing one half alone loads
+   only that half; the other keeps counting, apart from holding still for the
+   single LF edge the load consumes. The read view, and MTIP with it, shows each
+   half as soon as it is written, so between the two stores they see the mixed
+   value. To keep that value from crossing MTIMECMP, store HI first when the new
+   HI is lower than the old one and LO first when it is higher (only LO when
+   equal), or write MTIME with `mie.MTIE` clear.
 
 4. **`csrr time` is not ordered against an MTIME write.** A CSR read is not a
    memory operation under RVWMO, and `FENCE` orders memory against memory, so

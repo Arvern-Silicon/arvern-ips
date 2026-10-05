@@ -394,15 +394,16 @@ always @(*) begin
         end
         if (ir_is_dtmcs) begin
             // dmireset (bit16) or dmihardreset (bit17) clears the sticky error;
-            // dmireset then exposes a failure held behind it. Evaluated last so an
-            // explicit reset wins over any concurrent set.
+            // dmireset then exposes a failure held behind it or completing on this
+            // edge (it does not affect outstanding transactions). Evaluated last so
+            // an explicit reset wins over any concurrent set.
             if (dr_dtmcs[17]) begin
                 sticky_err_nxt = 2'd0;
                 errinfo_nxt    = ERRINFO_UNKNOWN;
                 fail_pend_nxt  = 1'b0;
             end else if (dr_dtmcs[16]) begin
-                sticky_err_nxt = fail_pend ? OP_FAILED_S    : 2'd0;
-                errinfo_nxt    = fail_pend ? ERRINFO_DEVICE : ERRINFO_UNKNOWN;
+                sticky_err_nxt = (fail_pend | complete_failed) ? OP_FAILED_S    : 2'd0;
+                errinfo_nxt    = (fail_pend | complete_failed) ? ERRINFO_DEVICE : ERRINFO_UNKNOWN;
                 fail_pend_nxt  = 1'b0;
             end
         end

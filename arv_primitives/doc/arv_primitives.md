@@ -551,7 +551,7 @@ nothing else; any flow that elaborates the cell needs the same waiver. The FuseS
 dependency check for the IPs that `depend:` on the library, not the library's lint:
 
 ```bash
-fusesoc --cores-root . run --target=lint arvern:ips:arv_primitives:1.0
+fusesoc --cores-root . run --target=lint arvern:ips:arv_primitives:1.0.0
 ```
 
 ### Running

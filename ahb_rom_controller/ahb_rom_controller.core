@@ -21,14 +21,14 @@ CAPI=2:
 # in that path.
 # ----------------------------------------------------------------------------
 
-name: arvern:ips:ahb_rom_controller:1.0
+name: arvern:ips:ahb_rom_controller:1.0.0
 description: AHB-Lite ROM controller for the arvern SoC family.
 
 filesets:
   rtl:
     file_type: verilogSource
     depend:
-      - arvern:ips:arv_primitives:1.0
+      - arvern:ips:arv_primitives:1.0.0
     files:
       - rtl/verilog/ahb_rom_controller.v
 
