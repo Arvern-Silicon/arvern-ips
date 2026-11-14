@@ -1,0 +1,14 @@
+{signal: [
+  {name: 'CMD.XFER_…',        wave: 'x=x...=x...=x....', data: ['START', 'NEXT', 'NEXT']},
+  {name: 'bus',               wave: 'x.=x=x...=x...=x.', data: ['SETUP', 'IN (8)', 'IN (2)', 'status OUT']},
+  {name: 'STATUS.XFER_BUSY',  wave: '01.............0.'},
+  {name: 'XFER.PKT',          wave: '0....1.0..1.0....'},
+  {name: 'XFER.LEN',          wave: 'x....=....=......', data: ['8', '2']},
+  {name: 'IRQ_PEND.XFER_DONE',wave: '0..............1.'},
+  {name: 'XFER.RESULT',       wave: 'x2.............2.', data: ['cleared', 'OK']},
+  {name: 'polling',           wave: '10.............1.'}
+],
+  head: {text: 'A software control transfer with a 10-byte IN data stage (CTRL_EN = 1): one packet per XFER_NEXT'},
+  foot: {text: 'IRQ_PEND.XFER_PKT rises with XFER.PKT; while it is set the port waits, keep-alives running; the short packet ends the stage'},
+  config: {hscale: 2}
+}

@@ -42,6 +42,11 @@ def coverage_configs():
         out.append(('hiperf_arst%d' % arst, dict(hip, ASYNC_RST_EN=arst), 'ahb_interconnect_hiperf'))
         out.append(('fused_arst%d' % arst, dict(fus, ASYNC_RST_EN=arst, FIXED_B_PRIO=0), 'ahb_interconnect_fused'))
     out.append(('fused_fixb', dict(fus, ASYNC_RST_EN=1, FIXED_B_PRIO=1), 'ahb_interconnect_fused'))
+    for fb in (0, 1):
+        out.append(('fused_breg_fb%d' % fb, dict(fus, ASYNC_RST_EN=1, FIXED_B_PRIO=fb, X_SRAM_B_APH_REG="32'h1"),
+                    'ahb_interconnect_fused'))
+    out.append(('fused_breg_arst0', dict(fus, ASYNC_RST_EN=0, FIXED_B_PRIO=0, X_SRAM_B_APH_REG="32'h1"),
+                'ahb_interconnect_fused'))
     out.append(('unit_dflt_sub', {}, 'ahb_default_subordinate'))
     for fb in (0, 1):
         out.append(('unit_rom_fb%d' % fb, dict(FIXED_B_PRIO=fb), 'ahb_fused_rom_ctrl'))

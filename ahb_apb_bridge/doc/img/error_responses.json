@@ -1,0 +1,24 @@
+{
+  "signal": [
+    { "name": "hclk_i",       "wave": "p......." },
+    [ "AHB",
+      { "name": "htrans_i",     "wave": "32..32..", "data": ["NONSEQ", "IDLE", "NONSEQ", "IDLE"] },
+      { "name": "haddr_i",      "wave": "3x..4x..", "data": ["A0", "unmapped"] },
+      { "name": "hwrite_i",     "wave": "1x..0x.." },
+      { "name": "hwdata_i",     "wave": "x3...x..", "data": ["D0"] },
+      { "name": "hreadyout_o",  "wave": "10..101." },
+      { "name": "hresp_o",      "wave": "0..1...0" },
+      { "name": "hrdata_o",     "wave": "x..0...." }
+    ],
+    { "name": "state",        "wave": "========", "data": ["IDLE", "SETUP", "ACCESS", "ERR1", "ERR2", "ERR1", "ERR2", "IDLE"] },
+    [ "APB",
+      { "name": "psel_o[k]",    "wave": "01.0...." },
+      { "name": "penable_o",    "wave": "0.10...." },
+      { "name": "paddr_o",      "wave": "x3...4..", "data": ["A0", "unmapped"] },
+      { "name": "pready_i[k]",  "wave": "x.1x...." },
+      { "name": "pslverr_i[k]", "wave": "x.1x...." }
+    ]
+  ],
+  "head": { "text": "PSLVERR on a write, then a read no completer decodes: two-cycle ERROR each" },
+  "config": { "hscale": 2 }
+}

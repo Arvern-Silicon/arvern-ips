@@ -55,7 +55,7 @@ _Static_assert(sizeof(PERIPH_TypeDef)           == 0x080, "PERIPH register windo
 #define PERIPH_MDELEG_RD_PRIV_Msk       PERIPH_FIELD(2u, 2u)
 #define PERIPH_MDELEG_RESP_Pos          8u
 #define PERIPH_MDELEG_RESP_Msk          (1u << 8)
-#define PERIPH_MDELEG_RESET             0x0000010Fu     /* Machine only, ERROR on denial */
+#define PERIPH_MDELEG_RESET             0x0000010Fu     /* default MDELEG_RST: Machine only, ERROR on denial */
 
 /* Privilege codes of WR_PRIV / RD_PRIV (2 is reserved and stores 3) */
 #define PERIPH_PRIV_CODE_U              0u

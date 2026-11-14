@@ -106,6 +106,23 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim fused_write_commit     -fused   -fixed_b_prio                  | tee $LOG_DIR/fused_write_commit-fused-fixp.log
 
     ../bin/runsim simple_rdwr            -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/simple_rdwr-fused-fixp-ws.log
+
+    # Registered Port B (X_SRAM_B_APH_REG): every data access to the fused SRAM
+    # takes one wait state. The unit bench (tb_ahb_fused_sram_ctrl) scripts a
+    # zero-wait Port B cycle by cycle, so this mode is verified here.
+    ../bin/runsim simple_rdwr            -fused   -fused_b_reg                   | tee $LOG_DIR/simple_rdwr-fused-breg.log
+    ../bin/runsim pipelined_rdwr         -fused   -fused_b_reg                   | tee $LOG_DIR/pipelined_rdwr-fused-breg.log
+    ../bin/runsim pipelined_advanced     -fused   -fused_b_reg                   | tee $LOG_DIR/pipelined_advanced-fused-breg.log
+    ../bin/runsim fused_arbiter          -fused   -fused_b_reg                   | tee $LOG_DIR/fused_arbiter-fused-breg.log
+    ../bin/runsim arbiter_stress         -fused   -fused_b_reg                   | tee $LOG_DIR/arbiter_stress-fused-breg.log
+    ../bin/runsim default_subordinate_stress -fused -fused_b_reg                 | tee $LOG_DIR/default_subordinate_stress-fused-breg.log
+    ../bin/runsim fused_write_commit     -fused   -fused_b_reg                   | tee $LOG_DIR/fused_write_commit-fused-breg.log
+    ../bin/runsim fused_x_write          -fused   -fused_b_reg                   | tee $LOG_DIR/fused_x_write-fused-breg.log
+    ../bin/runsim simple_rdwr            -fused   -fused_b_reg   -random_ws      | tee $LOG_DIR/simple_rdwr-fused-breg-ws.log
+    ../bin/runsim pipelined_advanced     -fused   -fused_b_reg   -random_ws      | tee $LOG_DIR/pipelined_advanced-fused-breg-ws.log
+    ../bin/runsim arbiter_stress         -fused   -fused_b_reg   -random_ws      | tee $LOG_DIR/arbiter_stress-fused-breg-ws.log
+    ../bin/runsim fused_arbiter          -fused   -fused_b_reg   -fixed_b_prio   | tee $LOG_DIR/fused_arbiter-fused-breg-fixp.log
+    ../bin/runsim pipelined_advanced     -fused   -fused_b_reg   -fixed_b_prio  -random_ws | tee $LOG_DIR/pipelined_advanced-fused-breg-fixp-ws.log
     ../bin/runsim pipelined_rdwr         -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/pipelined_rdwr-fused-fixp-ws.log
     ../bin/runsim pipelined_advanced     -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/pipelined_advanced-fused-fixp-ws.log
     ../bin/runsim fused_arbiter          -fused   -fixed_b_prio  -random_ws      | tee $LOG_DIR/fused_arbiter-fused-fixp-ws.log
@@ -136,6 +153,7 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim midrun_reset                                     | tee $LOG_DIR/midrun_reset.log
     ../bin/runsim midrun_reset -hiperf                             | tee $LOG_DIR/midrun_reset-hiperf.log
     ../bin/runsim midrun_reset -fused                              | tee $LOG_DIR/midrun_reset-fused.log
+    ../bin/runsim midrun_reset -fused -fused_b_reg                 | tee $LOG_DIR/midrun_reset-fused-breg.log
     ../bin/runsim xdflt_pipeline -fused                            | tee $LOG_DIR/xdflt_pipeline-fused.log
     ../bin/runsim xdflt_pipeline -fused -random_ws                 | tee $LOG_DIR/xdflt_pipeline-fused-ws.log
     ../bin/runsim xdflt_pipeline -hiperf                           | tee $LOG_DIR/xdflt_pipeline-hiperf.log
@@ -174,6 +192,7 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim midrun_reset                                     | tee $LOG_DIR/midrun_reset-sync.log
     ../bin/runsim midrun_reset -hiperf                             | tee $LOG_DIR/midrun_reset-hiperf-sync.log
     ../bin/runsim midrun_reset -fused                              | tee $LOG_DIR/midrun_reset-fused-sync.log
+    ../bin/runsim midrun_reset -fused -fused_b_reg                 | tee $LOG_DIR/midrun_reset-fused-breg-sync.log
 
     # GENERIC (default top)
     ../bin/runsim simple_rdwr                                    | tee $LOG_DIR/simple_rdwr-sync.log
@@ -189,6 +208,10 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     ../bin/runsim simple_rdwr            -fused                  | tee $LOG_DIR/simple_rdwr-fused-sync.log
     ../bin/runsim fused_arbiter          -fused                  | tee $LOG_DIR/fused_arbiter-fused-sync.log
     ../bin/runsim default_subordinate_stress -fused              | tee $LOG_DIR/default_subordinate_stress-fused-sync.log
+
+    # FUSED, registered Port B (X_SRAM_B_APH_REG)
+    ../bin/runsim simple_rdwr            -fused  -fused_b_reg    | tee $LOG_DIR/simple_rdwr-fused-breg-sync.log
+    ../bin/runsim fused_arbiter          -fused  -fused_b_reg    | tee $LOG_DIR/fused_arbiter-fused-breg-sync.log
 
     # Restore async (default) reset architecture for any subsequent iteration.
     unset SIM_EXTRA_DEFINES

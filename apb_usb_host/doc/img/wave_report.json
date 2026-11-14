@@ -1,0 +1,12 @@
+{signal: [
+  {name: 'bus',                wave: 'x=x......', data: ['report + ACK']},
+  {name: 'REPORT_INFO.SEQ',    wave: '2.2......', data: ['n', 'n+1']},
+  {name: 'IRQ_PEND.REPORT',    wave: '0.1....0.'},
+  {name: 'irq_o',              wave: '0.1....0.'},
+  {name: 'software reads',     wave: 'x...====x', data: ['INFO', 'REPORT[0]', 'REPORT[1]', 'INFO']},
+  {name: 'IRQ_PEND write',     wave: 'x......=x', data: ['W1C']}
+],
+  head: {text: 'A report (IRQ_EN.REPORT = 1): the report is copied to the window, SEQ increments, REPORT rises'},
+  foot: {text: 'software reads REPORT_INFO, the report words, then REPORT_INFO again, and repeats if SEQ changed'},
+  config: {hscale: 3}
+}

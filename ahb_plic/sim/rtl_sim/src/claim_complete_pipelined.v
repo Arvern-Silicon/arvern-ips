@@ -11,7 +11,9 @@
 //----------------------------------------------------------------------------
 // File Name          : claim_complete_pipelined
 // Module Description : Claims and completes in back-to-back AHB transfers, each
-//                      address phase overlapping the previous data phase.
+//                      address phase overlapping the previous data phase (a
+//                      claim read's data phase is two cycles: a wait state,
+//                      then the ID).
 //                      (a) Claim via ctx 0 then via ctx 1 on a source both enable:
 //                          the first wins, the second returns the next source for
 //                          ctx 1, or 0 (the claim updates state on the edge ending
@@ -99,10 +101,14 @@ initial
          repeat(3) @(posedge free_clk); #1;
          cp_aph(0, `CLAIM(0));
          @(posedge free_clk); #1;
-         cp_aph(0, `CLAIM(1));
+         cp_aph(0, `CLAIM(1));                          // held through the first claim's wait state
+         chk(hreadyout === 1'b0 && hresp === 1'b0, "(a) first claim (ctx 0) did not stall");
+         @(posedge free_clk); #1;
          chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === CP_S, "(a) first claim (ctx 0) did not return the source");
          @(posedge free_clk); #1;
          bus_idle;
+         chk(hreadyout === 1'b0 && hresp === 1'b0, "(a) second claim (ctx 1) did not stall");
+         @(posedge free_clk); #1;
          chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === 32'h0, "(a) second claim (ctx 1) did not return 0");
          @(posedge free_clk); #1;
          irq_src[CP_S] = 1'b0;
@@ -116,10 +122,12 @@ initial
          cp_aph(0, `CLAIM(0));
          @(posedge free_clk); #1;
          cp_aph(0, `CLAIM(1));
-         chk(hrdata === CP_S, "(a) first claim (ctx 0) did not return the high-priority source");
+         @(posedge free_clk); #1;
+         chk(hreadyout === 1'b1 && hrdata === CP_S, "(a) first claim (ctx 0) did not return the high-priority source");
          @(posedge free_clk); #1;
          bus_idle;
-         chk(hrdata === CP_T, "(a) second claim (ctx 1) did not return the next source");
+         @(posedge free_clk); #1;
+         chk(hreadyout === 1'b1 && hrdata === CP_T, "(a) second claim (ctx 1) did not return the next source");
          @(posedge free_clk); #1;
          irq_src[CP_S] = 1'b0;
          irq_src[CP_T] = 1'b0;
@@ -145,11 +153,15 @@ initial
       chk(hreadyout === 1'b1 && hresp === 1'b0, "(b) complete not zero-wait OKAY");
       @(posedge free_clk); #1;
       cp_aph(0, `CLAIM(0));
+      chk(hreadyout === 1'b0 && hresp === 1'b0, "(b) claim right after the complete did not stall");
+      @(posedge free_clk); #1;
       chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === 32'h0, "(b) claim right after the complete did not return 0");
-      // The re-pend lands one edge later: a claim one cycle later returns the source.
+      // The re-pend lands one edge after the completion: the next claim returns the source.
       @(posedge free_clk); #1;
       bus_idle;
-      chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === CP_S, "(b) claim one cycle after the complete did not return the source");
+      chk(hreadyout === 1'b0 && hresp === 1'b0, "(b) second claim did not stall");
+      @(posedge free_clk); #1;
+      chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === CP_S, "(b) second claim did not return the source");
       @(posedge free_clk); #1;
       irq_src[CP_S] = 1'b0;
       ahb_write(1, MACHINE, `CLAIM(0), CP_S, 2, OK);
@@ -170,6 +182,8 @@ initial
       chk(hreadyout === 1'b1 && hresp === 1'b1 && hrdata === 32'h0, "(c) ERROR cycle 2 expected");
       @(posedge free_clk); #1;                          // held claim taken at this edge
       bus_idle;
+      chk(hreadyout === 1'b0 && hresp === 1'b0, "(c) held claim did not stall");
+      @(posedge free_clk); #1;
       chk(hreadyout === 1'b1 && hresp === 1'b0 && hrdata === CP_S, "(c) held claim did not return the source");
       @(posedge free_clk); #1;
       chk(dut.in_service_flat[CP_S] === 1'b1 && dut.in_service_flat[CP_T] === 1'b0 &&

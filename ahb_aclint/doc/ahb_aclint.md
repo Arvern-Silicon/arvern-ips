@@ -303,8 +303,10 @@ window and cannot map its contents by ERROR-vs-OK. Offsets outside all three
 windows are RAZ/WI regardless of privilege, since no window claims them. The Zicntr `time_req_i` port bypasses
 the check entirely; it is a core-private side band, not a bus transaction.
 
-`PRIV_CHECK_EN=0` accepts everything and holds `hresp_o` low; the integrator must
-then filter at the fabric. `hprot_i` / `hsmode_i` are then ignored but stay wired.
+`PRIV_CHECK_EN=0` accepts everything and holds `hresp_o` low: the IP is then
+unfiltered, and `ahb_interconnect` forwards the privilege sideband without
+filtering it, so any protection must come from elsewhere in the SoC (a PMP region
+on the hart, for example). `hprot_i` / `hsmode_i` are then ignored but stay wired.
 
 ### Wait states
 

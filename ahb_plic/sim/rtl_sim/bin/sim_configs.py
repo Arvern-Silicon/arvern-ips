@@ -52,6 +52,7 @@ DEFAULT_TESTS = [
     "addr_walk",
     "reset_in_operation",
     "claim_complete_pipelined",
+    "claim_wait",
     # Source walk, threshold range ends, enable / priority changes under a live source:
     "source_walk",
     "threshold_extremes",
@@ -129,6 +130,8 @@ MANDATORY_COVER_BINS = [
     "hresp_err", "size_err",
     # Gateway / arbiter state
     "pending_any", "in_service_any", "claim_nonzero", "claim_pulse", "complete_pulse",
+    # Claim-read wait state
+    "claim_wait",
     # Spec corners that gate dedicated RTL terms
     "prio0_blocked", "threshold_masks",
     # Multi-word (source index > 31)

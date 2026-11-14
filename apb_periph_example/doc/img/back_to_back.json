@@ -1,0 +1,85 @@
+{
+  "signal": [
+    {
+      "name": "pclk_i",
+      "wave": "p......."
+    },
+    [
+      "APB",
+      {
+        "name": "psel_i",
+        "wave": "01.....0"
+      },
+      {
+        "name": "penable_i",
+        "wave": "0.101010"
+      },
+      {
+        "name": "paddr_i",
+        "wave": "x3.4.5.x",
+        "data": [
+          "0x00",
+          "0x00",
+          "0x40"
+        ]
+      },
+      {
+        "name": "pwrite_i",
+        "wave": "x1.0.1.x"
+      },
+      {
+        "name": "pwdata_i",
+        "wave": "x3.x.5.x",
+        "data": [
+          "D0",
+          "0x100"
+        ]
+      },
+      {
+        "name": "pstrb_i",
+        "wave": "x3.4.5.x",
+        "data": [
+          "1111",
+          "0000",
+          "0011"
+        ]
+      },
+      {
+        "name": "prdata_o",
+        "wave": "0...40..",
+        "data": [
+          "D0"
+        ]
+      },
+      {
+        "name": "pslverr_o",
+        "wave": "0......."
+      }
+    ],
+    [
+      "Registers",
+      {
+        "name": "register_00_o",
+        "wave": "2..3....",
+        "data": [
+          "old",
+          "D0"
+        ]
+      },
+      {
+        "name": "MDELEG",
+        "wave": "2......3",
+        "data": [
+          "0x10F",
+          "0x100"
+        ]
+      }
+    ]
+  ],
+  "head": {
+    "text": "Back to back: write REGOUT_00, read it back, open both gates to user mode (MDELEG)"
+  },
+  "config": {
+    "hscale": 2
+  }
+}

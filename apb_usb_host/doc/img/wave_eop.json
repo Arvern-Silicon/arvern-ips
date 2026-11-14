@@ -1,0 +1,11 @@
+{signal: [
+  {name: 'bit time',   wave: 'p.........'},
+  {name: 'line',       wave: '========..', data: ['K', 'J', 'K', 'K', 'SE0', 'SE0', 'J', 'J (idle)']},
+  {name: 'host',       wave: '=...=.==..', data: ['last bits of the packet', 'SE0, 2 bit times', 'J', 'released']},
+  {name: 'usb_oe_o',   wave: '1......0..'},
+  {name: 'usb_dp_o',   wave: '101.0.....'},
+  {name: 'usb_dm_o',   wave: '010...10..'}
+],
+  head: {text: 'Host end of packet: SE0, J, then the drivers released; the device pull-up holds the idle J'},
+  config: {hscale: 2}
+}

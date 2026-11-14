@@ -21,6 +21,7 @@ for line in open(os.path.join(RUN, 'run_all')):
         d = [design, 'RANDOM_WS' if '-random_ws' in opts else 'ZERO_WS']
         if '-fixed_b_prio' in opts: d.append('FUSED_FIXED_B_PRIO')
         if '-arb_parked' in opts:   d.append('ARB_PARKED_GRANT')
+        if '-fused_b_reg' in opts:  d.append('FUSED_B_APH_REG')
         if sync:                    d.append('ASYNC_RST_EN=0')
         tag = '__'.join([test] + [x.split('=')[0].lower() for x in d])
         jobs.append((tag, 'tb_ahb_interconnect', 'submit.f', test, d))

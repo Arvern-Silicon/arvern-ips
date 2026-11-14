@@ -24,6 +24,8 @@
 # sync-reset branch, and rules.tcl enforces the opposite reset rule for it.
 # ADDRW sizes the address window and the one-hot decoder; a build above the
 # minimum of 7 checks that nothing relies on the default width.
+# MDELEG_RST sets the MDELEG reset constants; "open" differs from the default
+# 9'h10F in every field (run_all runs mdeleg_reset in it).
 #----------------------------------------------------------------------------
 
 CONFIGS = [
@@ -31,5 +33,6 @@ CONFIGS = [
     ("default",    {}),                          # ADDRW=7, async reset (RTL defaults)
     ("sync_rst",   {"ASYNC_RST_EN": 0}),         # Synchronous reset: builds the arv_ipdff sync branches
     ("addrw8",     {"ADDRW": 8}),                # Wider window: decoder sized above the minimum
+    ("open",       {"MDELEG_RST": "9'h001"}),    # MDELEG reset: S writes, U reads, refusals ignored
 ]
 TOP_MODULE = "ahb_periph_example"

@@ -30,6 +30,8 @@
 //     A Port-B write reaches the macro at most one cycle after its data
 //     phase, whatever the traffic on either port (see arb_request): a
 //     Port-A fetch issued after the write's data phase always sees it.
+//   * B_APH_REG=1 registers Port B: every Port-B access is cached and
+//     granted from the cache, one or two wait states.
 //----------------------------------------------------------------------------
 `default_nettype none
 
@@ -38,6 +40,11 @@ module  ahb_fused_sram_ctrl #(
     //   1'b0 (default) - Toggle priority: 1:1 round-robin between M0 and M1
     //   1'b1           - Fixed priority for Port B (data bus): M1 always wins when requesting.
     parameter         [0:0] FIXED_B_PRIO = 1'b0,
+    // B_APH_REG=1 registers every Port-B address phase: it is cached and
+    // granted one cycle later at the earliest (one wait state per Port-B
+    // access, two when it loses that cycle to Port A or to a parked write),
+    // so the memory address, strobes and arbitration see only flops on Port B.
+    parameter         [0:0] B_APH_REG    = 1'b0,
     parameter               ARST_EN      = 1'b1   // 1=async active-low reset, 0=synchronous reset
 ) (
 
@@ -209,9 +216,13 @@ wire        m1_hwrite_to_sub;
 wire        m1_hsel_to_sub;
 wire        m1_hclk_en;
 
+// With B_APH_REG a valid address phase is never granted in its own cycle: a
+// grant needs m1_aph_pending, which holds b_hreadyout_o (and so b_hready_i)
+// low. The B_APH_REG terms make that structural, so the cache enables carry no
+// arbiter (Port-A) fan-in.
 assign m1_aph_valid             =  b_hsel_i & b_hready_i & b_htrans_i[1];
-assign m1_latch_aph             =  m1_aph_valid & ~m1_grant;
-assign m1_aph_immediate_granted =  m1_aph_valid   & m1_grant;
+assign m1_latch_aph             =  m1_aph_valid & (B_APH_REG | ~m1_grant);
+assign m1_aph_immediate_granted =  m1_aph_valid & ~B_APH_REG & m1_grant;
 assign m1_aph_delayed_granted   =  m1_aph_pending & m1_grant;
 assign m1_aph_granted           =  m1_aph_immediate_granted | m1_aph_delayed_granted;
 
@@ -227,7 +238,8 @@ arv_ipdff #(.WIDTH(1), .ARST_EN(ARST_EN)) u_m1_dph_ongoing (
                                                             .d_i (m1_aph_granted),
                                                             .q_o (m1_dph_ongoing));
 
-// Cache APH control signals while we wait for grant (loaded on m1_latch_aph).
+// Cache APH control signals while we wait for grant (loaded on m1_latch_aph;
+// with B_APH_REG every address phase is loaded).
 arv_ipdff #(.WIDTH(32), .ARST_EN(ARST_EN)) u_m1_haddr_cache (
                         .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(m1_latch_aph),
                                                              .d_i (b_haddr_i),
@@ -248,7 +260,9 @@ arv_ipdff #(.WIDTH(1),  .ARST_EN(ARST_EN)) u_m1_hwrite_cache (
                                                               .d_i (b_hwrite_i),
                                                               .q_o (m1_hwrite_cache));
 
-assign m1_request       = (m1_aph_valid | m1_aph_pending);
+// With B_APH_REG a Port-B address phase is always cached first (it cannot be
+// granted in its own cycle) and requests from the cache only
+assign m1_request       = m1_aph_pending | (~B_APH_REG & m1_aph_valid);
 
 assign b_hreadyout_o    = m1_dph_ongoing  ? 1'b1 :
                           m1_aph_pending  ? 1'b0 :
@@ -257,10 +271,10 @@ assign b_hreadyout_o    = m1_dph_ongoing  ? 1'b1 :
 assign b_hrdata_o       = bus_hrdata & {32{m1_dph_ongoing}};
 assign b_hresp_o        = 1'b0;
 
-assign m1_haddr_to_sub  = m1_aph_pending ? m1_haddr_cache  : b_haddr_i ;
-assign m1_hsize_to_sub  = m1_aph_pending ? m1_hsize_cache  : b_hsize_i ;
-assign m1_htrans_to_sub = m1_aph_pending ? m1_htrans_cache : b_htrans_i;
-assign m1_hwrite_to_sub = m1_aph_pending ? m1_hwrite_cache : b_hwrite_i;
+assign m1_haddr_to_sub  = (B_APH_REG | m1_aph_pending) ? m1_haddr_cache  : b_haddr_i ;
+assign m1_hsize_to_sub  = (B_APH_REG | m1_aph_pending) ? m1_hsize_cache  : b_hsize_i ;
+assign m1_htrans_to_sub = (B_APH_REG | m1_aph_pending) ? m1_htrans_cache : b_htrans_i;
+assign m1_hwrite_to_sub = (B_APH_REG | m1_aph_pending) ? m1_hwrite_cache : b_hwrite_i;
 assign m1_hwdata_to_sub = b_hwdata_i & {32{m1_dph_ongoing}};
 assign m1_hsel_to_sub   = m1_grant;
 
@@ -385,7 +399,7 @@ always @* begin
             else                    state_nxt = IDLE;
         end
         READ_PENDING_WRITE: begin
-            if      (sub_aph_write) state_nxt = WRITE;
+            if      (sub_aph_write) state_nxt = WRITE;   // no grant in this state (arb_request masked)
             else if (sub_aph_read ) state_nxt = READ_PENDING_WRITE;
             else                    state_nxt = IDLE;
         end
@@ -439,14 +453,24 @@ assign sram_din_o     = (bus_hwdata    & {32{sram_wr_cmd & ~sram_wr_pause}}) |
 // the parked write is restored one cycle later). Qualified with arb_grant[1]
 // so the 30-bit comparator stays off the M0 critical path; a Port-A read in
 // that same cycle gets the pre-write word, which is the FENCE.I contract.
-assign sram_read_from_pause = arb_grant[1] & sram_rd_cmd & state_nxt[RPW_BIT] & (sram_wr_addr_buf == m1_haddr_to_sub[31:2]);
+// With B_APH_REG Port B is never granted in the cycle after its own grant, so
+// it never reads in a write's data phase: the forwarding is not built.
+generate
+if (B_APH_REG) begin : gen_no_fwd
+    assign sram_read_from_pause      = 1'b0;
+    assign sram_read_from_pause_post = 4'b0000;
+end else begin : gen_fwd
+    assign sram_read_from_pause = arb_grant[1] & sram_rd_cmd & state_nxt[RPW_BIT] & (sram_wr_addr_buf == m1_haddr_to_sub[31:2]);
+
+    // Registered read-data select strobes (unconditional next-state: en=1).
+    arv_ipdff #(.WIDTH(4), .ARST_EN(ARST_EN)) u_sram_read_from_pause_post (
+                                      .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),
+                                                                           .d_i ({4{sram_read_from_pause}} & sram_wr_en_buf),
+                                                                           .q_o (   sram_read_from_pause_post));
+end
+endgenerate
 
 // Registered read-data select strobes (unconditional next-state: en=1).
-arv_ipdff #(.WIDTH(4), .ARST_EN(ARST_EN)) u_sram_read_from_pause_post (
-                                  .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),
-                                                                       .d_i ({4{sram_read_from_pause}} & sram_wr_en_buf),
-                                                                       .q_o (   sram_read_from_pause_post));
-
 arv_ipdff #(.WIDTH(4), .ARST_EN(ARST_EN)) u_sram_rd_cmd_post (
                          .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(1'b1),
                                                               .d_i ({4{sram_rd_cmd}} & ~({4{sram_read_from_pause}} & sram_wr_en_buf)),

@@ -1,0 +1,61 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# run -- one apb_i2s test.
+#   ./run [<test>] [-config <label>] [-seed <n>] [-nodump]
+#     <test>           file basename in ../src/ (default: reset_values)
+#     -config <label>  build with that bin/sim_configs.py config's defines
+#                      (reproduces a run_all -sweep failure)
+#     -seed <n>        replay a seed
+#     -nodump          no VCD
+#----------------------------------------------------------------------------
+
+# Enable/Disable waveform dumping
+SIMULATION_NODUMP=0
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+# Default test name
+testname="reset_values"
+config=""
+seedarg=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -config) config="$2"; shift 2 ;;
+        -seed)   seedarg="-seed $2"; shift 2 ;;
+        -nodump) SIMULATION_NODUMP=1; shift ;;
+        *)       testname="$1"; shift ;;
+    esac
+done
+
+if [ ! -e "../src/$testname.v" ]; then
+   echo "[ERROR] File does not exist: ../src/$testname.v"
+   echo ""
+   echo "The following tests have been detected:"
+   for file in ../src/*.v; do
+      echo "                                          + $(basename "$file" .v)"
+   done
+   exit 1
+fi
+
+if [ -n "$config" ]; then
+    SIM_EXTRA_DEFINES=$(python3 ../bin/sim_configs.py defines "$config") || {
+        echo "[ERROR] unknown config '$config' (have: $(python3 ../bin/sim_configs.py labels))"
+        exit 1
+    }
+    export SIM_EXTRA_DEFINES
+    echo "Config $config: $SIM_EXTRA_DEFINES"
+fi
+
+# Run simulation
+../bin/runsim $seedarg $testname

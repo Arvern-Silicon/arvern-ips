@@ -503,6 +503,8 @@ Assigned so far:
 | Part-number | Board / chip | Set in |
 |-------------|--------------|--------|
 | `0x8000` | DE0-Nano-SoC (`alteral_de0_nano_soc`) | [`arvern_fpga.v`](https://github.com/Arvern-Silicon/arvern-soc/blob/main/fpga/alteral_de0_nano_soc/rtl/verilog/arvern_fpga.v) (`IDCODE_BASE` parameter, overriding `arv_dtm`'s default) |
+| `0x8001` | Tang Console 138K (`sipeed_tang_console_138k`) | [`arvern_fpga.v`](https://github.com/Arvern-Silicon/arvern-soc/blob/main/fpga/sipeed_tang_console_138k/rtl/verilog/arvern_fpga.v) (`IDCODE_BASE` parameter, overriding `arv_dtm`'s default) |
+| `0x8002` | DE25-Nano (`terasic_de25_nano`) | reserved: board port in progress |
 
 Adding a new board or chip: pick the next unused number in the appropriate range above,
 set it as an `IDCODE_BASE` override where that board/chip instantiates `arv_dtm` (don't

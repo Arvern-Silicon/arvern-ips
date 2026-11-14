@@ -43,10 +43,12 @@ Configs (`./run_vclint -list_configs`):
 | 5 | `fused_default` | `ahb_interconnect_fused` | (defaults) |
 | 6 | `fused_norom` | `ahb_interconnect_fused` | NR_S_X_ROM=0 |
 | 7 | `fused_syncrst` | `ahb_interconnect_fused` | ASYNC_RST_EN=0 |
+| 8 | `fused_breg` | `ahb_interconnect_fused` | NR_S_X_ROM=0 X_SRAM_B_APH_REG=32'h1 |
+| 9 | `fused_breg_fixb` | `ahb_interconnect_fused` | FIXED_B_PRIO=1'b1 X_SRAM_B_APH_REG=32'h1 |
 
 ## Status
 
-Clean on all 7 configs. Waivers: registered feedback through `arv_ipdff`
+Clean on all 9 configs. Waivers: registered feedback through `arv_ipdff`
 port maps (the default subordinate's data-phase shift, the AHB hready loop),
 and the fused ROM controller's arbitration flop with a non-zero reset value.
 

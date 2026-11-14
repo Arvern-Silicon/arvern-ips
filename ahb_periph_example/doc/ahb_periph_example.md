@@ -70,6 +70,7 @@ AHB-Lite when an unauthorized access is detected.
 |----------------|---------|------------|---------|
 | `ADDRW`        | `7`     | `>= 7`     | AHB address width; the decoded register window is `1<<ADDRW` bytes. Below 7 the `MDELEG` offset (`0x40`) would truncate onto `REGOUT_00`. A simulation build with `ADDRW < 7` stops at elaboration (`$fatal` in the `CHECK_ADDRW` generate block, which sits under `translate_off`), and Verilator lint reports the truncated `MDELEG` offset (WIDTHTRUNC); synthesis does not check it. |
 | `ASYNC_RST_EN` | `1`     | `0` or `1` | Reset style: `1` = asynchronous active-low reset (default); `0` = synchronous reset. Threaded to every flop through the shared `arv_ipdff` primitive (see the repository README's [Reset architecture](../../README.md#reset-architecture)). The reset contract is in [Integration requirements](#integration-requirements). |
+| `MDELEG_RST`   | `9'h10F` | see purpose | Reset value of `MDELEG[8:0]`: Machine mode only and ERROR by default. Bits `[7:4]` must be 0 and neither privilege field may hold the reserved `2'b10`; a simulation build that breaks either stops at elaboration (`CHECK_MDELEG_RST`, under `translate_off`). |
 
 ### Register map
 
@@ -95,7 +96,7 @@ since `MDELEG` sits at offset `0x40`.
 | `0x34` | `REGIN_13`  | RO     | —          | Reads `register_13_i[31:0]`                          |
 | `0x38` | `REGIN_14`  | RO     | —          | Reads `register_14_i[31:0]`                          |
 | `0x3C` | `REGIN_15`  | RO     | —          | Reads `register_15_i[31:0]`                          |
-| `0x40` | `MDELEG`    | RW (M-mode only) | `0x0000_010F` | Privilege-delegation register (see below) |
+| `0x40` | `MDELEG`    | RW (M-mode only) | `MDELEG_RST` (`0x0000_010F`) | Privilege-delegation register (see below) |
 
 Offsets above `MDELEG` are unmapped. What every class of access returns —
 admitted or denied, mapped or not — is the table in
@@ -114,21 +115,22 @@ subordinate).
 
 | Field      | Bits   | Reset | Access     | Description |
 |------------|--------|-------|------------|-------------|
-| `WR_PRIV`  | `[1:0]` | `2'b11` | RW (M-mode) | Minimum privilege level for a write to be admitted (at any offset but `MDELEG`). `00` = User, `01` = Supervisor, `10` = *reserved*, `11` = Machine. |
-| `RD_PRIV`  | `[3:2]` | `2'b11` | RW (M-mode) | Minimum privilege level for a read to be admitted (at any offset but `MDELEG`). Same encoding as `WR_PRIV`. |
-| `RESP`     | `[8]`   | `1'b1`  | RW (M-mode) | If `1`, a denied access produces a 2-cycle AHB ERROR response, at any offset in the window. If `0`, it is silently dropped (writes ignored, reads return `0`). |
+| `WR_PRIV`  | `[1:0]` | `MDELEG_RST[1:0]` (`2'b11`) | RW (M-mode) | Minimum privilege level for a write to be admitted (at any offset but `MDELEG`). `00` = User, `01` = Supervisor, `10` = *reserved*, `11` = Machine. |
+| `RD_PRIV`  | `[3:2]` | `MDELEG_RST[3:2]` (`2'b11`) | RW (M-mode) | Minimum privilege level for a read to be admitted (at any offset but `MDELEG`). Same encoding as `WR_PRIV`. |
+| `RESP`     | `[8]`   | `MDELEG_RST[8]` (`1'b1`)  | RW (M-mode) | If `1`, a denied access produces a 2-cycle AHB ERROR response, at any offset in the window. If `0`, it is silently dropped (writes ignored, reads return `0`). |
 | reserved   | `[7:4]`, `[31:9]` | `0` | RO | Reads as zero; writes ignored. |
 
-**Reset defaults** (`MDELEG = 0x0000_010F`):
+**Reset defaults** (the default `MDELEG_RST`, `MDELEG = 0x0000_010F`):
 
 - `WR_PRIV = 0b11` — only **Machine mode** can write to `REGOUT_*`.
 - `RD_PRIV = 0b11` — only **Machine mode** can read from `REGOUT_*` /
   `REGIN_*`.
 - `RESP = 1` — generate ERROR on unauthorized accesses.
 
-After reset, the peripheral is therefore **fully Machine-mode locked**.
-M-mode firmware can relax this by writing a smaller `RD_PRIV` /
-`WR_PRIV` and/or clearing `RESP`.
+With these defaults the peripheral is **fully Machine-mode locked** after
+reset. M-mode firmware can relax this by writing a smaller `RD_PRIV` /
+`WR_PRIV` and/or clearing `RESP`; a build that must come out of reset
+open sets `MDELEG_RST` instead.
 
 **Writing `MDELEG`.** A field written with the reserved code `2'b10`
 stores `2'b11` and reads back `2'b11`. Sub-word writes are byte-lane
@@ -345,8 +347,8 @@ tied off internally to `*_unused` sink wires (see
   managers can access any register. M-mode firmware must reprogram
   `MDELEG` before lower-privilege code can use the peripheral. This is
   the safe default; if your integration wants the peripheral
-  pre-opened, change the `MDELEG_WR_PRIV_RST` / `MDELEG_RD_PRIV_RST` /
-  `MDELEG_RESP_RST` localparams in the RTL.
+  pre-opened, set `MDELEG_RST` (for example `9'h000`: every mode
+  admitted, no ERROR).
 
 - **Misaligned accesses** — the byte-mask decoder assumes the manager
   presented an aligned transfer (i.e. `haddr[1:0]` consistent with
@@ -520,16 +522,18 @@ cd sim/rtl_sim/run
 
 `run_all` runs every test in three builds: the RTL defaults, synchronous
 reset (`-D ASYNC_RST_EN=0`, logs `<test>-sync.log`) and a wider window
-(`-D ADDRW=8`, logs `<test>-addrw8.log`). A single test takes the same
+(`-D ADDRW=8`, logs `<test>-addrw8.log`). The tests in its `OPEN_TESTS`
+variable (`mdeleg_reset`) also run in an open build (`-D MDELEG_RST=1`,
+logs `<test>-open.log`); the other tests are directed against the default
+reset value. A single test takes the same
 defines through `SIM_EXTRA_DEFINES`, e.g.
 `SIM_EXTRA_DEFINES="-D ASYNC_RST_EN=0" ../bin/runsim error_hold`.
 
 `./run <name>` runs any `sim/rtl_sim/src/<name>.v`, but `run_all` runs
 the list in its `TESTS` variable — a new test is added there. The three
-builds are the `for build in` list of `run_all`; the same three
-configurations form the table `sim/rtl_sim/bin/rtl_configs.py` that the
-VC Static lint and the synthesis sweeps iterate — a new build goes in
-both.
+builds are the `for build in` list of `run_all`; they and the open
+build form the table `sim/rtl_sim/bin/rtl_configs.py` that the VC Static
+lint and the synthesis sweeps iterate — a new build goes in both.
 
 ### Test suite
 
@@ -551,6 +555,7 @@ both.
 | `ro_input_walk`    | Every bit of every `register_XX_i` reaches `hrdata_o` rising and falling (all-ones / all-zeros, walking one and zero); an input that changes early in the data phase is returned with its new value in that data phase. |
 | `addrw8_upper_window` | With `ADDRW = 8` (skipped below): the upper half of the window (0x80, 0xA0, 0xC0, 0xFC) is unmapped — Machine-mode accesses are OKAY no-ops reading 0 that reach neither `REGOUT_00`, `REGIN_08` nor `MDELEG`; denied User accesses get ERROR with `RESP = 1` and are dropped with `RESP = 0`. |
 | `ro_writes_hprot`  | Writes to every `REGIN_*` offset are OKAY no-ops in Machine mode and ERROR in User mode under the reset gates. `hprot_i[0]` and `hprot_i[3:2]` take every value on admitted and denied Machine, Supervisor and User accesses without changing the outcome. |
+| `mdeleg_reset`     | `MDELEG` reads `MDELEG_RST` after reset and its gates apply from the first transfer: every mode writes and reads a `REGOUT`, reads a `REGIN` and reads `MDELEG`, with OKAY or ERROR as the reset value says; after a rewrite, a reset restores it. Runs in every build and in the open one (`MDELEG_RST = 9'h001`). |
 | `mdeleg_lanes`     | `MDELEG` byte-lane matrix: half-word at `0x40`, bytes at `0x40`–`0x43`, reserved code `2'b10` in each field, reserved bits dropped. A pipelined `MDELEG` write is in force for the next transfer: an `MDELEG` read returns the new value and an access the new gates admit or deny gets OKAY or ERROR. |
 
 A test passes when its log contains `SIMULATION PASSED`; `addrw8_upper_window`

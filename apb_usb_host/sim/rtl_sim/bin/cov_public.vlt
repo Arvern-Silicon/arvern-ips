@@ -1,0 +1,11 @@
+`verilator_config
+// Internal DUT nets the bench's monitor and coverage flags read by hierarchical
+// reference, kept public (read-only: the bench never writes them): optimised away,
+// a timed monitor would see a stale value.
+public_flat_rd -module "apb_usb_host" -var "*"
+public_flat_rd -module "apb_usb_host_seq" -var "*"
+// Bench/test variables shared between processes: without this the simulator may
+// hand a monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_apb_usb_host" -var "*"
+// The device model's state, which tests wait on and read by hierarchical reference
+public_flat_rw -module "usb_ls_dev" -var "*"

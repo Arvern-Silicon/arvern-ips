@@ -52,6 +52,8 @@ lint_at ahb_interconnect_hiperf  waivers_hiperf.vlt  -GNR_M=15
 lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_M=1
 lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_M=15
 lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_S_X_ROM=0
+lint_at ahb_interconnect_fused   waivers_fused.vlt   -GNR_S_X_ROM=0 -GX_SRAM_B_APH_REG=1 -GASYNC_RST_EN=0
+lint_at ahb_interconnect_fused   waivers_fused.vlt   -GX_SRAM_B_APH_REG=1 -GFIXED_B_PRIO=1
 rm -f lint_sweep.log
 echo ""
 [ $lint_sweep_fail -eq 0 ] && echo "LINT SWEEP PASSED" || echo "LINT SWEEP FAILED"

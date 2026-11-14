@@ -1,0 +1,88 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# run_all -- the apb_gpio regression.
+#   ./run_all [N]     REGRESSION_CONFIGS x their test lists, N loops (default 1)
+#   ./run_all -sweep  every SIM_CONFIGS entry (bin/run_sweep.py, ./log_sweep/)
+#   ./run_all -cov    every SIM_CONFIGS pair under Verilator (bin/runcov)
+# The test lists and configs come from bin/sim_configs.py: do NOT hardcode
+# them here.
+#----------------------------------------------------------------------------
+
+if [ "$1" = "-sweep" ]; then
+    shift
+    exec ../bin/run_sweep.py "$@"
+fi
+if [ "$1" = "-cov" ]; then
+    shift
+    exec ../bin/runcov "$@"
+fi
+
+# Disable waveform dumping
+SIMULATION_NODUMP=1
+export SIMULATION_NODUMP
+
+# Choose simulator:
+#                   - iverilog  : Icarus Verilog  (default)
+#                   - cver      : CVer
+#                   - verilog   : Verilog-XL
+#                   - ncverilog : NC-Verilog
+#                   - vcs       : VCS
+#                   - vsim      : Modelsim
+#                   - isim      : Xilinx simulator
+VERILOG_SIMULATOR=iverilog
+export VERILOG_SIMULATOR
+
+# An empty list would make the regression "pass" without running anything.
+CONFIGS=$(python3 ../bin/sim_configs.py regression 2>&1)
+if [ $? -ne 0 ] || [ -z "$CONFIGS" ]; then
+    echo "ERROR: could not read REGRESSION_CONFIGS from ../bin/sim_configs.py"
+    echo "$CONFIGS"
+    exit 1
+fi
+
+# Argument specifies number of regression loops
+if [ $# -ne 1 ]; then
+    LAST_REGRESSION=0
+else
+    LAST_REGRESSION=$(($1-1))
+fi
+
+# Cleanup from previous regression
+LOG_DIR=./log
+rm -rf $LOG_DIR/*
+
+# Perform the regression runs
+for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
+  do
+
+    # Cleanup & log directory setup
+    LOG_DIR=./log/$ii
+    mkdir -p $LOG_DIR
+
+    # Logs are <test>.log for the default config and <test>--<config>.log for
+    # the others, so ../bin/parse_results counts each build as a test.
+    for cfg in $CONFIGS; do
+        TESTS=$(python3 ../bin/sim_configs.py tests $cfg)
+        if [ -z "$TESTS" ]; then
+            echo "ERROR: empty test list for config $cfg"
+            exit 1
+        fi
+        SIM_EXTRA_DEFINES=$(python3 ../bin/sim_configs.py defines $cfg)
+        export SIM_EXTRA_DEFINES
+        if [ "$cfg" = "default" ]; then suffix=""; else suffix="--$cfg"; fi
+        echo "Config $cfg ($(echo $TESTS | wc -w | tr -d ' ') tests): ${SIM_EXTRA_DEFINES:-defaults}"
+        for tt in $TESTS; do
+            ../bin/runsim $tt                 | tee $LOG_DIR/$tt$suffix.log
+        done
+    done
+    unset SIM_EXTRA_DEFINES
+
+    # Report regression results
+    ../bin/parse_results $LOG_DIR             | tee $LOG_DIR/../summary.$ii.log
+
+done
+
+
+if [ $LAST_REGRESSION != 0 ]; then
+    ../bin/parse_summaries                    | tee $LOG_DIR/../regressions_summary.log
+fi

@@ -66,11 +66,11 @@ module  plic_target #(
     input  wire                                 reg_wr_en_i,             // 1 = write, 0 = read
     input  wire                          [31:0] reg_wr_data_i,           // Write data
     output wire                          [31:0] reg_rd_data_o,           // Read data (0 when not selected)
-    output wire                                 reg_ready_o,             // Always 1 (single-cycle)
+    output wire                                 reg_ready_o,             // 0 in the first cycle of a claim read, else 1
 
 // CLAIM / COMPLETE PULSES
-    output wire                                 claim_pulse_o,           // 1-cycle: claim accepted on a read of 0x4
-    output wire                          [10:0] claim_source_id_o,       // = top_source_id_o when pulse high, else 0
+    output wire                                 claim_pulse_o,           // 1-cycle: claim accepted on a read of 0x4 (its second cycle)
+    output wire                          [10:0] claim_source_id_o,       // registered winner when pulse high, else 0
     output wire                                 complete_pulse_o,        // 1-cycle: complete written on a write of 0x4
     output wire                          [10:0] complete_source_id_o,    // = reg_wr_data_i[10:0] when pulse high, else 0
 
@@ -178,21 +178,33 @@ assign irq_o           = |qual_irq;
 //=============================================================================
 // 3)  CLAIM / COMPLETE PULSE GENERATION
 //=============================================================================
-// Claim pulse:    read of 0x4 with a non-zero claim-side top source ->
-//                 1-cycle pulse. Claim returns the threshold-INDEPENDENT
-//                 top (see arbiter comment above).
+// Claim read:     two cycles. The first registers the claim-side top source
+//                 (threshold-INDEPENDENT, see arbiter comment above) with
+//                 reg_ready_o low; the second returns it and, if non-zero,
+//                 pulses the claim with it. The arbiter tree thus ends at a
+//                 flop instead of the bus read data.
 // Complete pulse: write of 0x4 -> 1-cycle pulse, ID = reg_wr_data_i[10:0],
 //                 BUT silently dropped if the target's enable bit for that
 //                 source is 0 (or the ID is 0 / out of range). Per PLIC 1.0.0
 //                 spec, Chapter 9: "If the completion ID does not match an
 //                 interrupt source that is currently enabled for the target,
 //                 the completion is silently ignored."
-// Both pulse generators are gated to one cycle by reg_sel_i, which the AHB
-// top guarantees is one-cycle (every sub-block is single-cycle, hreadyout_o=1,
-// so dph_valid is asserted for exactly one cycle per transfer).
+// The AHB top holds reg_sel_i through the data phase: one cycle for a write,
+// two for a claim read, so each pulse fires once per transfer.
 
-assign claim_pulse_o        = access_claim & ~reg_wr_en_i & (top_id_claim != 11'h0);
-assign claim_source_id_o    = claim_pulse_o ? top_id_claim : 11'h0;
+wire        claim_rd   = access_claim & ~reg_wr_en_i;
+wire        claim_hold;                                  // second cycle of a claim read
+wire [10:0] claim_id_q;
+wire        claim_en       = claim_rd | claim_hold;
+wire        claim_hold_nxt = claim_rd & ~claim_hold;
+
+arv_ipdff #(.WIDTH(12), .ARST_EN(ARST_EN)) u_claim (
+                          .clk_i(hclk_i), .rst_n_i(hresetn_i), .en_i(claim_en),
+                                                               .d_i ({claim_hold_nxt, top_id_claim}),
+                                                               .q_o ({claim_hold, claim_id_q}));
+
+assign claim_pulse_o        = claim_rd & claim_hold & (claim_id_q != 11'h0);
+assign claim_source_id_o    = claim_pulse_o ? claim_id_q : 11'h0;
 
 // Per-target enable check for completion: id in 1..NUM_SOURCES AND enable_i[id]=1.
 // enable_i[0] is hard-tied 0 by plic_enable, so id=0 also drops the pulse via
@@ -230,19 +242,19 @@ assign complete_source_id_o = complete_pulse_o ? complete_id_w : 11'h0;
 //=============================================================================
 // 4)  READ MUX
 //=============================================================================
-// 0x0 reads zero-extended threshold; 0x4 reads zero-extended top_source_id
-// (the claim-side, threshold-independent value -- see arbiter comment).
+// 0x0 reads zero-extended threshold; 0x4 reads the registered claim winner
+// (valid in the second cycle, when reg_ready_o is 1).
 
 reg  [31:0] rd_mux;
 always @(*) begin
     if (access_claim)
-        rd_mux = {21'h0, top_id_claim};
+        rd_mux = {21'h0, claim_id_q};
     else
         rd_mux = {{(32-PRIO_BITS){1'b0}}, threshold};
 end
 
 assign reg_rd_data_o = (reg_sel_i & ~reg_wr_en_i) ? rd_mux : 32'h0;
-assign reg_ready_o   = 1'b1;
+assign reg_ready_o   = ~(claim_rd & ~claim_hold);
 
 
 //=============================================================================

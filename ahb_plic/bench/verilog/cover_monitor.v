@@ -36,6 +36,7 @@ reg cov_claim_nonzero;
 reg cov_claim_pulse;
 reg cov_complete_pulse;
 reg cov_multiword;
+reg cov_claim_wait;
 
 initial begin
    cov_eip_m_hi      = 1'b0; cov_eip_s_hi       = 1'b0;
@@ -47,6 +48,7 @@ initial begin
    cov_claim_nonzero = 1'b0;
    cov_claim_pulse   = 1'b0; cov_complete_pulse = 1'b0;
    cov_multiword     = 1'b0;
+   cov_claim_wait    = 1'b0;
 end
 
 // ---- Global (context-independent) bins ----
@@ -58,6 +60,7 @@ always @(negedge free_clk) begin
    if (hclk_en === 1'b1) cov_hclk_en_hi = 1'b1;
    if (hclk_en === 1'b0) cov_hclk_en_lo = 1'b1;
    if (hresp   === 1'b1) cov_hresp_err  = 1'b1;
+   if ((hreadyout === 1'b0) && (hresp === 1'b0)) cov_claim_wait = 1'b1;   // claim-read wait state
    if (|dut.pending_flat[NUM_SOURCES:1]    === 1'b1) cov_pending_any    = 1'b1;
    if (|dut.in_service_flat[NUM_SOURCES:1] === 1'b1) cov_in_service_any = 1'b1;
    if ((dut.dph_valid === 1'b1) && (dut.dph_size !== 3'b010)) cov_size_err = 1'b1;
@@ -129,6 +132,7 @@ task cover_report;
       cover_emit("claim_pulse",    cov_claim_pulse);
       cover_emit("complete_pulse", cov_complete_pulse);
       cover_emit("multiword",      cov_multiword);
+      cover_emit("claim_wait",     cov_claim_wait);
       $display("----------------------------------------------------------------");
    end
 endtask

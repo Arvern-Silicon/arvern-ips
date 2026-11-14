@@ -1,0 +1,12 @@
+`verilator_config
+// Internal DUT nets the bench's coverage monitor reads by hierarchical reference,
+// kept public: optimised away, a timed monitor would see a stale value.
+public_flat_rw -module "ahb_apb_bridge" -var "attr_en"
+public_flat_rw -module "ahb_apb_bridge" -var "aph_bad"
+public_flat_rw -module "ahb_apb_bridge" -var "aph_sel"
+public_flat_rw -module "ahb_apb_bridge" -var "st_idle"
+public_flat_rw -module "ahb_apb_bridge" -var "st_done"
+public_flat_rw -module "ahb_apb_bridge" -var "st_err2"
+// Bench/test variables shared between processes: without this Verilator may hand a
+// monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_ahb_apb_bridge" -var "*"

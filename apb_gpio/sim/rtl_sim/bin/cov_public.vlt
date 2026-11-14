@@ -1,0 +1,12 @@
+`verilator_config
+// Internal DUT nets the bench's coverage monitor reads by hierarchical reference,
+// kept public: optimised away, a timed monitor would see a stale value.
+public_flat_rw -module "apb_gpio" -var "wr_irq_pend"
+public_flat_rw -module "apb_gpio" -var "wdata"
+public_flat_rw -module "apb_gpio" -var "irq_edge"
+public_flat_rw -module "apb_gpio" -var "in_en_q"
+public_flat_rw -module "apb_gpio" -var "in_vld_any"
+public_flat_rw -module "apb_gpio" -var "irq_latch_q"
+// Bench/test variables shared between processes: without this the simulator may
+// hand a monitor a stale copy of a flag another process set.
+public_flat_rw -module "tb_apb_gpio" -var "*"

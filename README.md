@@ -15,21 +15,32 @@
 
 | IP                    | Description                                                                                                                | Documentation                                                                                  |
 |-----------------------|----------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------|
+| ***AHB fabric and memories*** | | |
 | `ahb_interconnect`    | Parameterizable AHB-Lite multi-manager / multi-subordinate fabric. Three variants (generic / hiperf / fused) sharing the same external AHB contract, with a built-in default-subordinate ERROR responder. | [`ahb_interconnect/doc/ahb_interconnect.md`](ahb_interconnect/doc/ahb_interconnect.md)         |
 | `ahb_rom_controller`  | Parameterizable AHB ROM controller with single-cycle read latency. Bridges an AHB-Lite-style read master to a sync ROM.    | [`ahb_rom_controller/doc/ahb_rom_controller.md`](ahb_rom_controller/doc/ahb_rom_controller.md) |
 | `ahb_sram_controller` | Parameterizable AHB SRAM controller with byte-enable writes and a 1-deep pause buffer that resolves read-after-write hazards on the shared SRAM port. | [`ahb_sram_controller/doc/ahb_sram_controller.md`](ahb_sram_controller/doc/ahb_sram_controller.md) |
-| `ahb_periph_example`  | Reference AHB-Lite slave wiring 8 read-write + 8 read-only 32-bit registers, with an `MDELEG` privilege-delegation register that gates accesses by the master's privilege level. Intended as a starting template for new peripherals. | [`ahb_periph_example/doc/ahb_periph_example.md`](ahb_periph_example/doc/ahb_periph_example.md) |
+| ***AHB system peripherals*** | | |
 | `ahb_aclint`          | RISC-V ACLINT (Advanced Core-Local INTerruptor) as a single AHB-Lite slave, consolidating the MSWI / MTIMER / SSWI banks. The MTIME counter is paced by an always-on low-frequency clock so timer ticks advance for wake-from-WFI while the main oscillator is off. | [`ahb_aclint/doc/ahb_aclint.md`](ahb_aclint/doc/ahb_aclint.md) |
 | `ahb_plic`            | RISC-V PLIC (Platform-Level Interrupt Controller) as a single AHB-Lite slave, routing up to `NUM_SOURCES` level-triggered interrupt lines into per-hart M-mode and (optional) S-mode contexts. SiFive-compatible address layout, so mainstream PLIC drivers (Linux, OpenSBI, FreeRTOS, Zephyr) work unchanged. | [`ahb_plic/doc/ahb_plic.md`](ahb_plic/doc/ahb_plic.md) |
+| `ahb_periph_example`  | Reference AHB-Lite slave wiring 8 read-write + 8 read-only 32-bit registers, with an `MDELEG` privilege-delegation register that gates accesses by the master's privilege level. Intended as a starting template for new peripherals. | [`ahb_periph_example/doc/ahb_periph_example.md`](ahb_periph_example/doc/ahb_periph_example.md) |
+| ***APB peripherals*** | | |
+| `ahb_apb_bridge`      | AHB-Lite subordinate driving up to sixteen APB4 completers, each in its own power-of-two window; the AHB response is registered, so slow peripherals stay off the AHB return path. Writes are not posted: an APB error reaches the manager with its transfer. | [`ahb_apb_bridge/doc/ahb_apb_bridge.md`](ahb_apb_bridge/doc/ahb_apb_bridge.md) |
+| `apb_periph_example`  | Reference APB4 completer with the register map and `MDELEG` privilege gate of `ahb_periph_example`, answering refused accesses with `PSLVERR`. The starting template for peripherals behind `ahb_apb_bridge`. | [`apb_periph_example/doc/apb_periph_example.md`](apb_periph_example/doc/apb_periph_example.md) |
+| `apb_gpio`            | General-purpose I/O for up to 32 pins on an APB4 completer port: output value and enable per pin, synchronised inputs, rising/falling-edge and high/low-level interrupts with one line per pin (PLIC-ready) plus a combined line, up to four alternate functions per pin, an `MDELEG` privilege gate, and an always-on input path with an asynchronous wake request. | [`apb_gpio/doc/apb_gpio.md`](apb_gpio/doc/apb_gpio.md) |
+| `apb_i2s`             | Serial-audio master on an APB4 completer port: master, bit and word clocks from the APB clock, every common format (I2S, left/right-justified, DSP/PCM, 32- or 16-bit slots) chosen by software, 16-bit stereo or packed mono samples, transmit and receive FIFOs with thresholds and one interrupt line, loopback, debugger-aware reads and an `MDELEG` privilege gate. | [`apb_i2s/doc/apb_i2s.md`](apb_i2s/doc/apb_i2s.md) |
+| `apb_spi`             | SPI controller on an APB4 completer port: serial clock from the APB clock, all four clock modes, single, dual and quad lanes, up to eight chip selects with programmable timing, and a transmit FIFO of entries (transmit, receive, dummy clocks, polls) that runs a whole SD-card or flash transaction under one chip select; receive FIFO with thresholds and one interrupt line, 3-wire mode, an `MDELEG` privilege gate. | [`apb_spi/doc/apb_spi.md`](apb_spi/doc/apb_spi.md) |
+| `apb_usb_host`        | USB host for one low-speed HID device (keyboard, mouse, gamepad) on an APB4 completer port, from two pads without an external PHY: attachment, bus reset and enumeration in hardware, then raw HID reports to software; bounded retries and recovery from every fault, an `MDELEG` privilege gate. | [`apb_usb_host/doc/apb_usb_host.md`](apb_usb_host/doc/apb_usb_host.md) |
+| ***Core-side*** | | |
 | `arv_custom_csr`      | Parameterizable custom CSR peripheral. Configurable counts of User / Supervisor / Machine-mode RO and RW registers.        | [`arv_custom_csr/doc/arv_custom_csr.md`](arv_custom_csr/doc/arv_custom_csr.md)                 |
 | `arv_dtm`             | Debug Transport Modules (DTMs) — the master side of the aRVern core's external-debug link. Drives the core's transport-agnostic DMI bus (an APB4 slave) through one shared `arv_dtm_dmi_master` (APB4 master + CDC) backend, offering four interchangeable physical transports: a standards-compliant RISC-V Debug Spec 1.0 **JTAG** DTM (OpenOCD + GDB out of the box with any adapter OpenOCD supports, a J-Link, or [`arvern-tools`](https://github.com/Arvern-Silicon/arvern-tools) with an FT232H), a 2-pin IEEE 1149.7 OScan1 **cJTAG** DTM driven by a J-Link in its cJTAG mode (SEGGER Ozone or the J-Link GDB Server; validated with Ozone, OpenOCD over cJTAG not validated, `arvern-tools` support planned), plus non-standard "DMI-over-serial" **UART** and **I2C** transports for boards without a JTAG pod, driven by `arvern-tools`. A build-time `DTM_TYPE` on the `arv_dtm` wrapper selects one. | [`arv_dtm/doc/arv_dtm.md`](arv_dtm/doc/arv_dtm.md) |
+| ***Shared library*** | | |
 | `arv_primitives`      | Shared primitives library (not a standalone IP): the reset-style-selectable flip-flops `arv_ipdff` / `arv_ipdff_sinit`, the 2-FF clock-domain-crossing synchronizer `arv_synchronizer`, the clock gate `arv_cgate`, and the `arv_and` / `arv_or` gate primitives, plus two reference blocks built from them: the reset generator `arv_reset_gen` and the oscillator controller `arv_osc_ctrl`. Every other IP depends on it, and it is the intended place to apply your own PD/technology rules. | [`arv_primitives/doc/arv_primitives.md`](arv_primitives/doc/arv_primitives.md) |
 
 More IPs will land here as the ecosystem grows.
 
 ## Release notes
 
-Latest release: **1.0.1**.
+Latest release: **1.1.0**.
 
 What changed in each release, and how to upgrade: [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -47,7 +58,7 @@ Each IP follows a uniform layout:
 └── synthesis/synopsys/      Synthesis flow (Design Compiler)
 ```
 
-**C drivers.** `ahb_aclint`, `ahb_plic` and `ahb_periph_example` ship a register map
+**C drivers.** `ahb_aclint`, `ahb_plic`, `ahb_periph_example`, `apb_periph_example`, `apb_gpio`, `apb_i2s`, `apb_spi` and `apb_usb_host` ship a register map
 (`<ip>_regs.h`) and a driver in `sw/`: C11, no `malloc`, RV32E-clean. Each touches only
 its own IP's registers and stands alone; for interrupt handling it pairs with the trap
 layer of the [aRVern core support library](https://github.com/Arvern-Silicon/arvern/tree/main/sw),
@@ -116,7 +127,7 @@ cwd).  The filelist preprocessor is `sim/rtl_sim/bin/flatten_filelist.py`.
 ## Reset architecture
 
 Every IP exposes a build-time parameter selecting the reset style — **`ASYNC_RST_EN`**
-on the AHB IPs and `arv_custom_csr`, and **`ARST_EN`** on `arv_dtm` (matching the
+on the AHB and APB IPs and `arv_custom_csr`, and **`ARST_EN`** on `arv_dtm` (matching the
 parameter name used by `arv_primitives` itself):
 
 | Value | Reset style | Reset assertion |

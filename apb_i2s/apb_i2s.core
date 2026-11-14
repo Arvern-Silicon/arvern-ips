@@ -1,0 +1,60 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      apb_i2s.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:apb_i2s:1.0.0
+description: APB4 serial-audio master (I2S, left/right-justified, DSP/PCM) with transmit and receive FIFOs.
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/apb_i2s_fifo.v
+      - rtl/verilog/apb_i2s_core.v
+      - rtl/verilog/apb_i2s.v
+    depend:
+      - arvern:ips:arv_primitives:1.0.0
+
+  core_rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/apb_i2s_core.v
+    depend:
+      - arvern:ips:arv_primitives:1.0.0
+
+  lint_waivers:
+    files:
+      - sim/rtl_sim/run/waivers.vlt: {file_type: vlt}
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    filesets: [rtl, lint_waivers]
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: apb_i2s
+
+  # The shift engine alone (clock generator, serialiser, deserialiser), for an
+  # IP that reuses it without the APB wrapper
+  shift_engine:
+    filesets: [core_rtl]
+
+  lint_core:
+    filesets: [core_rtl, lint_waivers]
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: apb_i2s_core

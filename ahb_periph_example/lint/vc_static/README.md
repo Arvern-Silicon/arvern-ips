@@ -39,13 +39,18 @@ Configs (`./run_vclint -list_configs`):
 | 1 | `default` | `ahb_periph_example` | (defaults) |
 | 2 | `sync_rst` | `ahb_periph_example` | ASYNC_RST_EN=0 |
 | 3 | `addrw8` | `ahb_periph_example` | ADDRW=8 |
+| 4 | `open` | `ahb_periph_example` | MDELEG_RST=9'h001 |
 
 ## Status
 
 Clean on every config. The decoder's dead bits — slots above `MDELEG`, and
 the write strobes of the read-only REGIN bank — are sunk explicitly into
-`reg_dec_unused`, so they are documented at the source. No design-specific
-waivers.
+`reg_dec_unused`, so they are documented at the source. One design-specific
+waiver, in the `open` config only: an `MDELEG` privilege field reset to
+Supervisor (`2'b01`) mixes set and reset bits from `hresetn_i`
+(`CODING_TREE_SETRST_ORIG`), as any `arv_ipdff` with a mixed reset value does.
+It is gated on the `MDELEG_RST` value, so a build with no such field leaves it
+out.
 
 `stale=0` is the signal to protect: it means every waiver in `waivers.tcl`
 matched something. A non-zero count means a waiver has gone stale or is scoped

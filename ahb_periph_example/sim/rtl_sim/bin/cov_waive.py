@@ -9,7 +9,7 @@ The legacy line format was:
 
     <file>:<locator>   <type>[,<type>]   [sig=<glob>]   # <reason>
 
-    file      basename of the RTL file, e.g. ahb_manager_if.v
+    file      basename of the RTL file, e.g. <module>.v
     locator   a line number, /literal text/ matched as a SUBSTRING of that line, or
               re/pattern/ for an actual regex. Prefer the literal form: Verilog is
               full of ( ) [ ] which silently change meaning in a regex.

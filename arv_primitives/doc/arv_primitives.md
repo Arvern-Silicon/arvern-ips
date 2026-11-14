@@ -106,10 +106,12 @@ Two things must survive the swap:
 - **`test_en_i` must keep forcing the clock on.** Tie it to the DFT scan-enable on
   ASIC; a gate without it blocks the scan chain.
 
-No IP in the library instantiates the cell in its RTL: the IPs export a clock-enable
-request (`hclk_en_o`) and the SoC gates the clock above them. `arv_cgate` is the cell
-that gate is expected to be, and the `arv_scope` bench and this library's own test
-are what exercise it (see [Verification](#verification)).
+The IPs export a clock-enable request (`hclk_en_o`, `pclk_en_o`) and the SoC gates
+the clock above them; `arv_cgate` is the cell that gate is expected to be. One IP
+also gates a clock inside its RTL: `apb_gpio`'s always-on input path
+(`u_inp_cgate`, `INP_CGATE_EN`). This library's own test, the `apb_gpio`
+regression and the `arv_scope` bench exercise the cell (see
+[Verification](#verification)).
 
 ### Use a hardened or monolithic synchroniser
 
@@ -223,10 +225,13 @@ Edit freely, but these properties are relied on by the IPs above:
 | `WIDTH`, `W`, `N` below 1 are a simulation-time `$fatal` | a zero width silently elaborates as a two-bit reversed range |
 
 `RST_VAL` deserves particular attention on `arv_synchronizer`: an idle-**high** input
-(a UART RX line, an I2C bus, a TMSC pad) must reset to `1`, or the conditioning comes
-out of reset showing a phantom falling edge and the receiver decodes a start bit that
-never happened. Both the UART and I2C front ends depend on this — it is why they need
-no reset guard window.
+(a UART RX line, an I2C bus) must reset to `1`, or the conditioning comes out of reset
+showing a phantom falling edge and the receiver decodes a start bit that never
+happened. Both the UART and I2C front ends depend on this — it is why they need no
+reset guard window. The cJTAG escape detector is the one deliberate exception: it
+resets its TMSC sample to `0`, but counts TMSC changes only after TCKC has been high
+for two samples, a guard that absorbs the phantom edge (`arv_dtm_cjtag.v`,
+`u_esc_tmsc_sync`).
 
 ### X propagation in simulation
 
@@ -285,6 +290,12 @@ Ports: `clk_i` (destination), `rst_n_i`, `async_i[W-1:0]` → `sync_o[W-1:0]`.
 
 A change on `async_i` reaches `sync_o` on the second `clk_i` edge in either style.
 
+Simulation only: with `` `ARV_SYNC_JITTER `` defined, a bit whose input changed is
+captured one edge late at random (never twice in a row), so a change reaches `sync_o`
+on the second or third edge and the bits of a `W > 1` instance may arrive on different
+edges. The draws are seeded from `` `SEED `` (when defined) and the instance path. The
+code sits in `` `ifdef `` and `translate_off`; synthesis and lint never see it.
+
 ### `arv_cgate` — integrated clock gate
 
 Ports: `clk_i`, `en_i`, `test_en_i` → `clk_o`. No parameters.
@@ -314,7 +325,12 @@ Not a technology cell like the six above: a small reference block assembled from
 them, giving a platform the three resets an aRVern SoC needs from one raw
 power-on reset. Each is **asserted asynchronously by the POR** and **released
 through a synchroniser on the clock that samples it**, which is what the IPs
-require of their reset inputs — none of them contains a reset synchroniser.
+require of their reset inputs. Three IPs still contain reset synchronisers of their
+own, each for a reset this block does not produce alone: the `arv_dtm` TAP
+(`dbgresetn_i` combined with the probe's asynchronous `TRST*`, released on TCK and on
+`hclk`), the cJTAG front end (its escape detector's reset, released on `hclk`), and
+`ahb_aclint`'s trust reset (raised by the oscillator-stop warning, released on the
+always-on clock).
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -462,7 +478,10 @@ released runs two edges longer than it otherwise would, which nothing observes.
   `LF_SYNC_EN=1` (it holds the wake asserted so the counter's clock is never taken
   away). The ACLINT's wake is a level held until MTIMECMP is rewritten, so both
   benches meet the rule by property; a pulse-shaped wake needs a latch in front of
-  this port.
+  this port. A source that holds its request until it has recorded the event on the
+  restarted clock also works, provided its consumer raises `enable_i` within the four
+  edges that follow: `apb_gpio`'s `gpio_wake_o` is one (its document, *Wake*, counts
+  the edges).
 
 **Which reset `resetn_i` is.** The raw POR (`arv_reset_gen`'s `porn_async_i`), or any
 reset derived from it. Assertion is asynchronous, so a reset released through a

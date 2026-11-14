@@ -18,9 +18,11 @@
  * The driver keeps no global state: every call takes the device handle filled
  * by periph_init(). The hardware has no identification register and no
  * parameter visible to software (ADDRW only sizes the window, ASYNC_RST_EN the
- * reset style), so the configuration is the base address alone.
+ * reset style, MDELEG_RST only the value MDELEG holds after reset), so the
+ * configuration is the base address alone.
  *
- * Access rights: after reset only Machine mode may access the window. An
+ * Access rights: with the default MDELEG_RST, only Machine mode may access the
+ * window after reset; a build may reset it open. An
  * access below the MDELEG gates is refused at every offset; with RESP = 1 it
  * gets an AHB ERROR, which an aRVern hart takes as a resumable data-bus NMI,
  * with RESP = 0 a write is dropped and a read returns 0.

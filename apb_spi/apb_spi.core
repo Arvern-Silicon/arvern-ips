@@ -1,0 +1,60 @@
+CAPI=2:
+
+# ----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          File:      apb_spi.core
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# ----------------------------------------------------------------------------
+# FuseSoC manifest for external integration — see ahb_rom_controller.core
+# for the usage pattern.  Native sim flow is under sim/rtl_sim/.
+# ----------------------------------------------------------------------------
+
+name: arvern:ips:apb_spi:1.0.0
+description: APB4 SPI controller (single, dual and quad lanes) with an entry FIFO and a receive FIFO.
+
+filesets:
+  rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/apb_spi_fifo.v
+      - rtl/verilog/apb_spi_core.v
+      - rtl/verilog/apb_spi.v
+    depend:
+      - arvern:ips:arv_primitives:1.0.0
+
+  core_rtl:
+    file_type: verilogSource
+    files:
+      - rtl/verilog/apb_spi_core.v
+    depend:
+      - arvern:ips:arv_primitives:1.0.0
+
+  lint_waivers:
+    files:
+      - sim/rtl_sim/run/waivers.vlt: {file_type: vlt}
+
+targets:
+  default: &default
+    filesets: [rtl]
+
+  lint:
+    filesets: [rtl, lint_waivers]
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: apb_spi
+
+  # The shift engine alone (serial clock, chip selects, serialiser,
+  # deserialiser), for an IP that reuses it without the APB wrapper
+  shift_engine:
+    filesets: [core_rtl]
+
+  lint_core:
+    filesets: [core_rtl, lint_waivers]
+    flow: lint
+    flow_options: {tool: verilator}
+    toplevel: apb_spi_core

@@ -1,0 +1,22 @@
+{
+  "signal": [
+    { "name": "hclk_i",       "wave": "p......." },
+    [ "AHB",
+      { "name": "htrans_i",     "wave": "32......", "data": ["NONSEQ", "IDLE"] },
+      { "name": "haddr_i",      "wave": "3x......", "data": ["A0"] },
+      { "name": "hwrite_i",     "wave": "0x......" },
+      { "name": "hreadyout_o",  "wave": "10...1.." },
+      { "name": "hrdata_o",     "wave": "x....3..", "data": ["R0"] }
+    ],
+    { "name": "state",        "wave": "===..==.", "data": ["IDLE", "SETUP", "ACCESS", "DONE", "IDLE"] },
+    [ "APB",
+      { "name": "psel_o[k]",    "wave": "01...0.." },
+      { "name": "penable_o",    "wave": "0.1..0.." },
+      { "name": "paddr_o",      "wave": "x3......", "data": ["A0"] },
+      { "name": "pready_i[k]",  "wave": "x.0.1x.." },
+      { "name": "prdata_i[k]",  "wave": "x...3x..", "data": ["R0"] }
+    ]
+  ],
+  "head": { "text": "Read with two completer wait states: four AHB wait states" },
+  "config": { "hscale": 2 }
+}

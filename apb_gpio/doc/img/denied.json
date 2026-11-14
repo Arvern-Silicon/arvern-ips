@@ -1,0 +1,19 @@
+{
+  "signal": [
+    { "name": "pclk_i",        "wave": "p......" },
+    [ "APB",
+      { "name": "psel_i",        "wave": "01.01.0" },
+      { "name": "penable_i",     "wave": "0.10.10" },
+      { "name": "paddr_i",       "wave": "x3.x4.x", "data": ["0x10 OUTPUT", "0x10 OUTPUT"] },
+      { "name": "pwrite_i",      "wave": "x1.x0.x" },
+      { "name": "pprot_i[0]",    "wave": "x0.x0.x" },
+      { "name": "prdata_o",      "wave": "0......" },
+      { "name": "pslverr_o",     "wave": "0.10.10" }
+    ],
+    [ "Pins",
+      { "name": "gpio_o",        "wave": "2......", "data": ["unchanged"] }
+    ]
+  ],
+  "head": { "text": "MDELEG at reset (Machine only, RESP=1): User-mode write and read of OUTPUT get PSLVERR, nothing written, PRDATA 0" },
+  "config": { "hscale": 2 }
+}

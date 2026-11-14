@@ -1,0 +1,23 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+# run_all -- the apb_usb_host regression.
+#   ./run_all [-j N] [-sim iverilog]   REGRESSION_CONFIGS x their test lists (./log/)
+#   ./run_all -sweep [<config> ...] [-j N] [-sim iverilog] [-tests t1,t2]
+#                                      every SIM_CONFIGS entry (./log_sweep/)
+#   ./run_all -cov                     every SIM_CONFIGS pair under Verilator
+#                                      with coverage (bin/runcov)
+# Runs in parallel, one work directory per run, Verilator by default (see
+# bin/run_sweep.py). The test lists and configs come from bin/sim_configs.py:
+# do NOT hardcode them here.
+#----------------------------------------------------------------------------
+
+if [ "$1" = "-sweep" ]; then
+    shift
+    exec ../bin/run_sweep.py "$@"
+fi
+if [ "$1" = "-cov" ]; then
+    shift
+    exec ../bin/runcov "$@"
+fi
+
+exec ../bin/run_sweep.py -regression -log ./log "$@"

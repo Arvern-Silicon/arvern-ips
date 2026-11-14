@@ -80,14 +80,18 @@ task ahb_write;
                 size==1 ? (haddr[1]==0   ? {16'h0000,   data[15:0]           } :
                                            {            data[15:0], 16'h0000 } ) :
                           data;
-      while(~hready) @(posedge free_clk);
-      #1;
+      // The address phase was accepted at that edge: drive IDLE, then wait
+      // out the data phase.
       haddr   = 32'h00000000;
       htrans  = 2'b00;
       hwrite  = 1'b0;
       hsize   = 3'b000;
       hprot   = 4'h2;                       // Back to privileged-M idle
       hsmode  = 1'b0;
+      while(~hready) begin                  // sampled after the edge has settled
+         @(posedge free_clk);
+         #1;
+      end
       if (blocking==1) begin
          @(posedge free_clk);
          while(~hready & blocking) @(posedge free_clk);
@@ -169,8 +173,18 @@ task ahb_read;
          $display("ERROR: AHB read response check -- address: 0x%h -- hresp: 0x%h / expected: 0x%h %t ns", addr, hresp, expected_resp, $time);
          error = error+1;
       end
-      while(~hready) @(posedge free_clk);
-      #1;
+      // The address phase was accepted at that edge: drive IDLE, then wait
+      // out the data phase.
+      haddr   = 32'h00000000;
+      htrans  = 2'b00;
+      hwrite  = 1'b0;
+      hsize   = 3'b000;
+      hprot   = 4'h2;                       // Back to privileged-M idle
+      hsmode  = 1'b0;
+      while(~hready) begin                  // sampled after the edge has settled
+         @(posedge free_clk);
+         #1;
+      end
       // Trigger read check
       ahb_read_check_active =  check;
       ahb_read_check_addr   =  addr;
@@ -195,12 +209,6 @@ task ahb_read;
                                                          32'h0000FFFF ) :
                                          32'hFFFFFFFF;
 
-      haddr   = 32'h00000000;
-      htrans  = 2'b00;
-      hwrite  = 1'b0;
-      hsize   = 3'b000;
-      hprot   = 4'h2;                       // Back to privileged-M idle
-      hsmode  = 1'b0;
       if (blocking==1) begin
          @(posedge free_clk);
          while(~hready & blocking) @(posedge free_clk);

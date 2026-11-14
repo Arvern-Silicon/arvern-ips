@@ -286,9 +286,12 @@ def _yosys_one(params, work, tag, flatten=True, top=None):
     files = cfg.rtl_files()
     pre, il = os.path.join(work, tag + '.pre.il'), os.path.join(work, tag + '.il')
     # Parameters are set with chparam before hierarchy: `hierarchy -chparam` trips an
-    # internal assert on some tops (Yosys 0.69, rtlil_bufnorm.cc).
+    # internal assert on some tops (Yosys 0.69, rtlil_bufnorm.cc). One chparam sets them
+    # all: chparam re-derives the module, and a half-applied set of dependent parameters
+    # (a packed vector sized by another one) can trip the design's own elaboration checks.
     cmds = ['read_verilog -nooverwrite -mem2reg ' + ' '.join(files)]
-    cmds += ['chparam -set %s %s %s' % (k, v, top) for k, v in sorted(params.items())]
+    if params:
+        cmds += ['chparam ' + ' '.join('-set %s %s' % (k, v) for k, v in sorted(params.items())) + ' ' + top]
     cmds += ['hierarchy -check -top %s' % top,
              'proc', 'write_rtlil ' + pre, 'setattr -set keep 1 w:*']
     if flatten:

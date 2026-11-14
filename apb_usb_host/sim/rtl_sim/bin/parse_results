@@ -1,0 +1,174 @@
+#!/bin/bash
+#----------------------------------------------------------------------------
+#          _    _           Family:    aRVern System IPs
+#         / \__/ \          Module:    parse_results
+#        /   /\   \         --------------------------------------------
+#    ===/   /=========      Copyright: (c) 2026, aRVern-dev
+#      /   / RV \   \       Contact:   arvernsilicon@gmail.com
+#     /___/______\___\      GitHub:    https://github.com/Arvern-Silicon
+#
+# SPDX-License-Identifier: BSD-3-Clause
+# Full license text is available in the LICENSE file at the repository root.
+#----------------------------------------------------------------------------
+# File Name          : parse_results
+# Module Description : Parse regression results in the log directory.
+#----------------------------------------------------------------------------
+
+###############################################################################
+#                                                                             #
+#                PARSE REGRESSION RESULTS IN THE LOG DIRECTORY                #
+#                                                                             #
+###############################################################################
+
+# Formating attributes
+green=$(tput setaf 2)
+green_bold=$(tput bold)$(tput setaf 2)
+red=$(tput setaf 1)
+red_bold=$(tput bold)$(tput setaf 1)
+normal=$(tput sgr0)
+
+# Specify log directory
+if [ $# -ne 1 ]; then
+    LOG_DIR=./log/0
+else
+    LOG_DIR=$1
+fi
+
+
+#----------------------------------------------------#
+# Get numbers of PASSED/SKIPPED/FAILED/ABORTED tests #
+#----------------------------------------------------#
+
+passed_nr="0"
+skipped_nr="0"
+failed_nr="0"
+aborted_nr="0"
+
+for file in $LOG_DIR/*.log ; do
+    passed_ok=`grep -c PASSED $file`
+    skipped_ok=`grep -c SKIPPED $file`
+    failed_ok=`grep -c FAILED $file`
+
+    if [ $passed_ok == 1 ]; then
+        passed_nr=`expr $passed_nr + 1`
+    elif [ $skipped_ok == 1 ]; then
+        skipped_nr=`expr $skipped_nr + 1`
+    elif [ $failed_ok != 0 ]; then
+        failed_nr=`expr $failed_nr + 1`
+    else
+        aborted_nr=`expr $aborted_nr + 1`
+    fi
+done
+
+#----------------------------------------------------#
+#            Display detailed report                 #
+#----------------------------------------------------#
+echo ""
+echo "#=====================================================================================================================================================================================#"
+echo "#                                                                                                                                                                                     #"
+echo "#                                                                                DETAILED REPORT                                                                                      #"
+echo "#                                                                                                                                                                                     #"
+echo "#=====================================================================================================================================================================================#"
+echo "#                            ||           ||               ||                                                                   ||                                                    #"
+echo "#          TEST NAME         ||  RESULT   ||      SEED     ||                              REPLAY COMMAND                       ||                      LOG FILE                      #"
+echo "#                            ||           ||               ||                                                                   ||                                                    #"
+echo "#============================++===========++===============++===================================================================++====================================================#"
+echo "#                            ||           ||               ||                                                                   ||                                                    #"
+for file in $LOG_DIR/*.log ; do
+    testname=`basename $file .log`
+    passed_ok=`grep -c PASSED $file`
+    skipped_ok=`grep -c SKIPPED $file`
+    failed_ok=`grep -c FAILED $file`
+    abort_ok=0
+    if [ $passed_ok == 1 ]; then
+        result="${green} PASSED  ${normal}"
+        replay_color="${normal}"
+    elif [ $skipped_ok == 1 ]; then
+        result="${normal} SKIPPED ${normal}"
+        replay_color="${normal}"
+    elif [ $failed_ok != 0 ]; then
+        result="${red} FAILED  ${normal}"
+        replay_color="${red}"
+    else
+        result="${red} ABORTED ${normal}"
+        replay_color="${red}"
+	abort_ok=1
+    fi
+
+    seed=`grep "SIMULATION SEED"   $file`
+    seed_arr=($seed)
+
+    printf "#   %-24s || %s || %12s  ||  $replay_color../bin/runsim -seed %12s   %-28s${normal}  || %-50s #\n" $testname "$result" " ${seed_arr[2]}" " ${seed_arr[2]}" "$testname" " $file"
+done
+echo "#                            ||           ||               ||                                                                   ||                                                    #"
+echo "#=====================================================================================================================================================================================#"
+echo ""
+
+#----------------------------------------------------#
+#        Display skipped and failed tests            #
+#----------------------------------------------------#
+echo ""
+echo "#===================================================================#"
+echo "#                          SKIPPED & FAILED TESTS                   #"
+echo "#===================================================================#"
+echo ""
+if [ $skipped_nr != 0 ]; then
+    echo " SKIPPED TESTS:"
+    for file in $LOG_DIR/*.log ; do
+        skipped_ok=`grep -c SKIPPED $file`
+        if [ $skipped_ok == 1 ]; then
+            echo "                 -  $file"
+        fi
+    done
+fi
+echo ""
+if [ $failed_nr != 0 ]; then
+    echo "${red_bold} FAILED TESTS:${normal}"
+    for file in $LOG_DIR/*.log ; do
+        failed_ok=`grep -c FAILED $file`
+        if [ $failed_ok != 0 ]; then
+            echo "${red_bold}                 -  $file ${normal}"
+        fi
+    done
+fi
+echo ""
+if [ $aborted_nr != 0 ]; then
+    echo  "${red_bold} ABORTED TESTS:${normal}"
+    for file in $LOG_DIR/*.log ; do
+        passed_ok=`grep -c PASSED $file`
+        if [ $passed_ok == 0 ]; then
+            failed_ok=`grep -c FAILED $file`
+            if [ $failed_ok == 0 ]; then
+                skipped_ok=`grep -c SKIPPED $file`
+                if [ $skipped_ok == 0 ]; then
+                    echo  "${red_bold}                 -  $file ${normal}"
+                fi
+            fi
+        fi
+    done
+fi
+echo ""
+
+#----------------------------------------------------#
+# Display summary report                             #
+#----------------------------------------------------#
+echo ""
+echo "#===================================================================#"
+echo "#                            SUMMARY REPORT                         #"
+echo "#===================================================================#"
+echo ""
+
+# Generate final report
+echo    "         +-----------------------------------"
+echo    "         | Number of PASSED  tests :${green_bold} $passed_nr ${normal}"
+echo    "         | Number of SKIPPED tests :${green_bold} $skipped_nr ${normal}"
+echo    "         | Number of FAILED  tests :${red_bold} $failed_nr ${normal}"
+echo    "         | Number of ABORTED tests :${red_bold} $aborted_nr ${normal}"
+echo    "         |----------------------------------"
+echo -n "         | Number of tests         : "
+ls -1 $LOG_DIR/*.log | wc -l
+echo    "         +----------------------------------"
+echo    ""
+echo    "         Make sure passed+skipped == total"
+echo    ""
+echo    ""

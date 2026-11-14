@@ -31,7 +31,7 @@ periph_status_t periph_init(periph_t *dev, const periph_config_t *cfg)
 
 periph_status_t periph_set_access(periph_t *dev, const periph_access_t *access)
 {
-    if (!access || !priv_valid(access->wr_priv) || !priv_valid(access->rd_priv))
+    if (!dev || !access || !priv_valid(access->wr_priv) || !priv_valid(access->rd_priv))
         return PERIPH_ERR_PARAM;
 
     /* One word store: gates (byte 0) and RESP (byte 1) switch together, no access sees a mix */

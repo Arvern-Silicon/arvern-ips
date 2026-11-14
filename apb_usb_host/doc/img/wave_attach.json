@@ -1,0 +1,12 @@
+{signal: [
+  {name: 'CTRL.EN',         wave: '01.........'},
+  {name: 'device pull-up',  wave: '0.1........'},
+  {name: 'STATUS.STATE',    wave: '==========.', data: ['OFF', 'DETACHED', 'DEBOUNCE', 'RESET', 'RECOVERY', 'ENUM', 'RESET', 'RECOVERY', 'ENUM', 'RUN']},
+  {name: 'duration',        wave: 'x.===x==x..', data: ['100-101 ms', '60-61 ms', '10-11 ms', '60-61 ms', '10-11 ms']},
+  {name: 'bus',             wave: 'x.=========', data: ['J', 'SE0', 'keep-alives', 'step 1', 'SE0', 'keep-alives', 'steps 3-8', 'polls', '']},
+  {name: 'STATUS.STEP',     wave: 'x..2..2.2.2', data: ['1', '2', '3 → 8', '0']},
+  {name: 'IRQ_PEND.READY',  wave: '0........1.'}
+],
+  head: {text: 'Attachment and enumeration (not to scale): a second bus reset follows step 1'},
+  config: {hscale: 2.5}
+}

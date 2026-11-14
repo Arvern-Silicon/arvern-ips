@@ -35,3 +35,24 @@
 waive_hdl -add unused_sink_wires \
           -comment "Deliberate *_unused sink wires: unloaded by design (aRVern convention)" \
           -filter {Signal=~*_unused*}
+
+# ---------------------------------------------------------------------------
+# arv_ipdff with a mixed RST_VAL: bits that reset to 1 infer an async SET and
+# bits that reset to 0 an async RESET, both from hresetn_i -- the normal
+# implementation of a flop with a non-zero reset value. Here it is an MDELEG
+# privilege field (u_mdeleg_wr_priv / u_mdeleg_rd_priv) reset to Supervisor,
+# 2'b01, the only legal code that mixes the two.
+#
+# CONDITIONAL on an MDELEG_RST override with a field at 2'b01; the default
+# 9'h10F resets both fields to 2'b11.
+# ---------------------------------------------------------------------------
+if {[info exists RTL_PARAM_MDELEG_RST]
+    && [regexp {'[hH]([0-9a-fA-F]+)} $RTL_PARAM_MDELEG_RST -> _mdeleg_rst_hex]} {
+    scan $_mdeleg_rst_hex %x _mdeleg_rst
+    if {(($_mdeleg_rst & 3) == 1) || ((($_mdeleg_rst >> 2) & 3) == 1)} {
+        waive_hdl -add dff_mixed_rstval_setreset \
+                  -comment "arv_ipdff with a mixed RST_VAL (MDELEG field reset to Supervisor): mixed set/reset from one reset is by design" \
+                  -tag CODING_TREE_SETRST_ORIG \
+                  -filter {Module=~arv_*dff*}
+    }
+}

@@ -57,12 +57,15 @@ waive_hdl -add ipdff_registered_feedback \
 # with a non-zero reset value. Here it is the fused ROM controller's
 # arbitration state, which resets to 2'b01 (round-robin, port B first).
 #
-# CONDITIONAL on the fused top with at least one ROM slot: the flop lives in
-# ahb_fused_rom_ctrl, which the generic / hiperf tops and the NR_S_X_ROM=0
-# build do not instantiate.
+# CONDITIONAL on the fused top with at least one ROM slot and the
+# round-robin scheme: the flop lives in ahb_fused_rom_ctrl, which the
+# generic / hiperf tops and the NR_S_X_ROM=0 build do not instantiate, and
+# its reset value is non-zero only in the round-robin scheme (ARB_RESET is
+# 2'b00 in the FIXED_B_PRIO=1 build).
 # ---------------------------------------------------------------------------
 if {$TOP eq "ahb_interconnect_fused"
-    && (![info exists RTL_PARAM_NR_S_X_ROM] || $RTL_PARAM_NR_S_X_ROM != 0)} {
+    && (![info exists RTL_PARAM_NR_S_X_ROM] || $RTL_PARAM_NR_S_X_ROM != 0)
+    && (![info exists RTL_PARAM_FIXED_B_PRIO] || ![regexp {1$} $RTL_PARAM_FIXED_B_PRIO])} {
     waive_hdl -add dff_nonzero_rstval_setreset \
               -comment "arv_ipdff with non-zero RST_VAL (fused ROM ctrl u_arb): mixed set/reset from one reset is by design" \
               -tag CODING_TREE_SETRST_ORIG \

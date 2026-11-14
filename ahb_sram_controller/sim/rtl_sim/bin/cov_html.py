@@ -12,6 +12,7 @@ that never changed rather than just the line.
 """
 import sys
 import os
+import re
 import glob
 import json
 import shutil
@@ -21,6 +22,7 @@ import collections
 import cov_waive
 
 PAGES = ('v_line', 'v_branch', 'v_toggle')
+_DIR = re.compile(r':(?:0->1|1->0)$')
 
 
 def parse(datdir, rtl_pats=('/rtl/verilog/',)):
@@ -29,7 +31,7 @@ def parse(datdir, rtl_pats=('/rtl/verilog/',)):
     Keyed per instance, the same identity cov_report.py uses, so both tools report
     the same totals. A line's badge is therefore hit/total across all instances.
     """
-    pts = {}
+    raw = {}
     for fn in glob.glob(os.path.join(datdir, '*.dat')):
         test = os.path.basename(fn)[4:-4] if os.path.basename(fn).startswith('cov_') \
                else os.path.basename(fn)[:-4]
@@ -57,15 +59,36 @@ def parse(datdir, rtl_pats=('/rtl/verilog/',)):
                 page = page_full.split('/')[0]
                 if page not in PAGES:
                     continue
-                k = (path, int(d.get('l', 0)), page, d.get('o', ''),
+                o = d.get('o', '')
+                base = _DIR.sub('', o)
+                k = (path, int(d.get('l', 0)), page, base,
                      d.get('h', ''), d.get('n', ''), page_full)
-                e = pts.get(k)
-                if e is None:
-                    e = pts[k] = [0, set()]
+                e = raw.setdefault(k, {}).setdefault(o[len(base):], [0, set()])
                 e[0] = max(e[0], c)
                 if c > 0:
                     e[1].add(test)
-    return pts
+    # Verilator >= 5.04x records each toggle bit as two points, `sig:0->1` and
+    # `sig:1->0`. Fold them into one point per bit, named as cov_report.py names it
+    # (so a waiver matches the same name in both tools), counted as the SMALLER
+    # direction: a bit is covered only once it has both risen and fallen, and only
+    # by the tests that saw both.
+    pts = {}
+    for k, dirs in raw.items():
+        v = list(dirs.values())
+        pts[k] = [min(x[0] for x in v), set.intersection(*(x[1] for x in v))]
+    # Two line/branch points on one line with one label (a chained ternary gives several
+    # cond_else) are told apart only by their column `n`. Name them `label@n`, as
+    # cov_report.py does, so a waiver written against that name matches here too.
+    cols = collections.defaultdict(set)
+    for k in pts:
+        if k[2] in ('v_line', 'v_branch'):
+            cols[(k[0], k[1], k[3])].add(k[5])
+    out = {}
+    for k, e in pts.items():
+        if k[2] in ('v_line', 'v_branch') and len(cols[(k[0], k[1], k[3])]) > 1:
+            k = k[:3] + ('%s@%s' % (k[3], k[5]),) + k[4:]
+        out[k] = e
+    return out
 
 
 def build(pts, reasons=None):
@@ -144,7 +167,7 @@ def build(pts, reasons=None):
 # template literal but a syntax error inside a normal "..." string.
 TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
-<title>ahb_interconnect coverage</title>
+<title>__TITLE__ coverage</title>
 <style>
  :root { --hit:#1f6f3f; --miss:#8c1c1c; --part:#8a6d1f; --bg:#ffffff; --fg:#1b1b1b; --dim:#7a7a7a;
          --bgmiss:#ffd4d4; --bgpart:#ffeec2; --sig:#7a1010;
@@ -547,7 +570,12 @@ def main(argv, rtl_pats=('/rtl/verilog/',)):
         suggest['%s:%d' % (fname, line)] = {
             'entries': entries, 'skipped': skipped, 'literal': literal}
 
-    doc = TEMPLATE.replace('__DATA__', json.dumps(files)) \
+    # The project is the directory holding sim/rtl_sim/bin, so every copy of this
+    # file stays byte-identical and still names its own repository or IP.
+    project = os.path.basename(os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', '..')))
+    doc = TEMPLATE.replace('__TITLE__', project) \
+                  .replace('__DATA__', json.dumps(files)) \
                   .replace('__TOTALS__', json.dumps(totals)) \
                   .replace('__SUGGEST__', json.dumps(suggest))
     with open(out, 'w', encoding='utf-8') as fh:

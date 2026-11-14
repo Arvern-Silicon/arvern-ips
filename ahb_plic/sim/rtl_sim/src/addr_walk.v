@@ -133,7 +133,8 @@ function [31:0] aw_readback;
 endfunction
 
 // One blocking transfer with explicit hprot / hsmode / hsize. A denied transfer
-// must give the two-cycle ERROR, a denied read with hrdata = 0 in both cycles.
+// must give the two-cycle ERROR, a denied read with hrdata = 0 in both cycles;
+// an admitted claim read has one wait state ({hresp, hreadyout} = 0,0) first.
 task aw_xfer;
    input        wr;
    input [31:0] addr;
@@ -171,6 +172,14 @@ task aw_xfer;
             error = error + 1;
          end
       end else begin
+         if (!wr && (aw_class({addr[21:2], 2'b00}) == AW_CLAIM)) begin
+            if (!((hreadyout === 1'b0) && (hresp === 1'b0))) begin
+               $display("ERROR: addr 0x%h wr=%b hprot=%h hsmode=%b hsize=%b: expected the claim wait state, got rdy=%b resp=%b %t ns",
+                        addr, wr, prot, smode, size, hreadyout, hresp, $time);
+               error = error + 1;
+            end
+            @(posedge free_clk); #1;
+         end
          if (!((hreadyout === 1'b1) && (hresp === 1'b0) && (wr || (hrdata === exp_rdata)))) begin
             $display("ERROR: addr 0x%h wr=%b hprot=%h hsmode=%b hsize=%b: expected OKAY (read data 0x%h), got rdy=%b resp=%b rdata=0x%h %t ns",
                      addr, wr, prot, smode, size, exp_rdata, hreadyout, hresp, hrdata, $time);

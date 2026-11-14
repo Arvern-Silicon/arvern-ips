@@ -117,6 +117,9 @@ parameter                    [0:0] FIXED_B_PRIO      = 1'b0;                    
                                                                                 //   1'b1 = fixed Port-B priority (data bus wins;
                                                                                 //          removes a_hsel_i from the memory-address
                                                                                 //          mux fan-in for tighter timing).
+parameter                   [31:0] X_SRAM_B_APH_REG  = 32'h0;                   // Per fused SRAM controller (bit j): register its
+                                                                                //   Port-B (data) address phase, one or two wait states
+                                                                                //   per data access, the memory address off the decoder path
 parameter                          ASYNC_RST_EN      = 1'b1;                    // 1=async active-low reset, 0=synchronous reset
 
 localparam                         NR_S_X            = NR_S_X_ROM+NR_S_X_SRAM;  // Total number of executable subordinates
@@ -234,6 +237,10 @@ generate
     // NR_S_X_SRAM>=1 guarantees at least one executable subordinate.
     if (NR_S_X_SRAM < 1) begin : CHECK_NR_S_X_SRAM
         initial $fatal(1, "ahb_interconnect_fused: NR_S_X_SRAM (%0d) must be >= 1.", NR_S_X_SRAM);
+    end
+    // X_SRAM_B_APH_REG holds one bit per fused SRAM controller
+    if (NR_S_X_SRAM > 32) begin : CHECK_X_SRAM_B_APH_REG
+        initial $fatal(1, "ahb_interconnect_fused: NR_S_X_SRAM (%0d) exceeds the 32 bits of X_SRAM_B_APH_REG.", NR_S_X_SRAM);
     end
     if (NR_S_NX < 1) begin : CHECK_NR_S_NX
         initial $fatal(1, "ahb_interconnect_fused: NR_S_NX (%0d) must be >= 1.", NR_S_NX);
@@ -685,6 +692,7 @@ generate
 
         ahb_fused_sram_ctrl #(
             .FIXED_B_PRIO      ( FIXED_B_PRIO                    ),
+            .B_APH_REG         ( X_SRAM_B_APH_REG[j]             ),
             .ARST_EN           ( ASYNC_RST_EN                    )
         ) ahb_fused_sram_ctrl_inst (
 

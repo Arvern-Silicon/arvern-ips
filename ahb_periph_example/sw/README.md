@@ -74,18 +74,22 @@ void periph_setup(void)                                  /* Machine mode */
 - **Device handle.** Every call takes the `periph_t` filled by `periph_init()`; the
   library keeps no global state, so several instances can coexist. The hardware has no
   identification register and no parameter software can see (`ADDRW` only sizes the
-  window, `ASYNC_RST_EN` the reset style), so the configuration is the base address
-  alone and `periph_init()` touches no register.
+  window, `ASYNC_RST_EN` the reset style, `MDELEG_RST` only the value `MDELEG` holds after
+  reset), so the configuration is the base address alone and `periph_init()` touches
+  no register.
 - **Status codes.** `periph_init()` and `periph_set_access()` return `periph_status_t`:
   `PERIPH_OK`, or `PERIPH_ERR_PARAM` for a null pointer, a misaligned base or the
   reserved privilege code `2`. Accessors return their value directly.
-- **Privilege.** After reset only Machine mode may access the window. `MDELEG`
+- **Privilege.** With the default `MDELEG_RST`, only Machine mode may access the window
+  after reset (`PERIPH_MDELEG_RESET`); a build may reset it open. `MDELEG`
   (`periph_set_access`, `periph_get_access`) is Machine mode only whatever the gates
   say; the gates then admit lower modes to the banks. An access below a gate is refused
   at every offset: with `error_resp` it gets an AHB ERROR, which an aRVern hart takes as
   a resumable data-bus NMI (not a load/store access fault); without it a write is
-  dropped and a read returns 0, which software cannot tell from data. The library does
-  not read the privilege mode: calling a function from a mode the gates refuse is the
+  dropped and a read returns 0, which software cannot tell from data. That NMI is taken
+  in Machine mode only, so when an S-mode kernel hands the peripheral to U-mode tasks,
+  Machine-mode firmware clears `error_resp` and the kernel never sees an NMI for their
+  refused accesses. The library does not read the privilege mode: calling a function from a mode the gates refuse is the
   caller's error.
 - **One transfer per gate change.** `periph_set_access()` writes `MDELEG` with one word
   store, so both gates and the response change together and are in force for the next

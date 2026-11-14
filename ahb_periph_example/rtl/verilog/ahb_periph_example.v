@@ -20,14 +20,15 @@
 `default_nettype none
 
 module  ahb_periph_example #(
-    parameter               ADDRW        = 7,   // AHB address-width (window = 1<<ADDRW bytes)
-    parameter               ASYNC_RST_EN = 1'b1 // Reset style: 1=async active-low reset, 0=synchronous reset
+    parameter               ADDRW        = 7,      // AHB address-width (window = 1<<ADDRW bytes)
+    parameter               ASYNC_RST_EN = 1'b1,   // Reset style: 1=async active-low reset, 0=synchronous reset
+    parameter         [8:0] MDELEG_RST   = 9'h10F  // MDELEG[8:0] reset value (default: M-mode only, ERROR)
 ) (
 
 // AHB CLOCK & RESET
     input  wire             hclk_i,             // module clock (from the AHB clock domain)
     input  wire             hresetn_i,          // active-low reset, style per ASYNC_RST_EN (sync de-assert required at IP boundary)
-    output wire             hclk_en_o,          // clock-gate enable; must drive an external ICG cell
+    output wire             hclk_en_o,          // clock request for an external ICG (combinational, keep unregistered)
 
 // AHB INTERFACE
     input  wire [ADDRW-1:0] haddr_i,            // AHB byte address
@@ -79,6 +80,11 @@ generate
     if ((ASYNC_RST_EN != 0) && (ASYNC_RST_EN != 1)) begin : CHECK_ASYNC_RST_EN
         initial $fatal(1, "ahb_periph_example: ASYNC_RST_EN (%0d) must be 0 or 1.", ASYNC_RST_EN);
     end
+    // A reset value must be one a write could store: no reserved privilege
+    // code (a write coerces it to 2'b11) and the reserved bits [7:4] zero.
+    if ((MDELEG_RST[1:0] == 2'b10) || (MDELEG_RST[3:2] == 2'b10) || (MDELEG_RST[7:4] != 4'h0)) begin : CHECK_MDELEG_RST
+        initial $fatal(1, "ahb_periph_example: MDELEG_RST (9'h%03h) holds a reserved privilege code or a reserved bit.", MDELEG_RST);
+    end
 endgenerate
 // pragma translate_on
 
@@ -91,10 +97,10 @@ localparam        [1:0] HSIZE_BYTE         =  2'b00;
 localparam        [1:0] HSIZE_HALF         =  2'b01;
 localparam        [1:0] HSIZE_WORD         =  2'b10;
 
-// MDELEG register reset values (M-mode-locked, ERROR on unauthorized access)
-localparam        [1:0] MDELEG_WR_PRIV_RST = 2'b11;
-localparam        [1:0] MDELEG_RD_PRIV_RST = 2'b11;
-localparam              MDELEG_RESP_RST    = 1'b1;
+// MDELEG register reset values, the fields of MDELEG_RST
+localparam        [1:0] MDELEG_WR_PRIV_RST = MDELEG_RST[1:0];
+localparam        [1:0] MDELEG_RD_PRIV_RST = MDELEG_RST[3:2];
+localparam              MDELEG_RESP_RST    = MDELEG_RST[8];
 
 // MDELEG priv-field reserved encoding (treated as "Machine-mode only")
 localparam        [1:0] MDELEG_PRIV_RSVD   = 2'b10;
@@ -293,9 +299,8 @@ wire        mdeleg_resp_nxt;
 wire        mdeleg_priv_wr     = reg_wr[MDELEG] & dph_byte_mask[0] & dph_machine_mode;
 wire        mdeleg_resp_wr     = reg_wr[MDELEG] & dph_byte_mask[1] & dph_machine_mode;
 
-// Coerce the reserved 2'b10 encoding to the most restrictive level (M-mode
-// only) at write time so a firmware bug that confuses Supervisor (2'b01)
-// with the reserved code cannot silently weaken access control.
+// Coerce the reserved 2'b10 encoding to Machine-mode only (2'b11) at write
+// time, so the register never holds or reads back a reserved code.
 wire  [1:0] mdeleg_wr_priv_wdata = (hwdata_i[1:0] == MDELEG_PRIV_RSVD) ? 2'b11 : hwdata_i[1:0];
 wire  [1:0] mdeleg_rd_priv_wdata = (hwdata_i[3:2] == MDELEG_PRIV_RSVD) ? 2'b11 : hwdata_i[3:2];
 

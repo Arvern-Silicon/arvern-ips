@@ -42,11 +42,15 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
     # Every test runs in three builds: the RTL defaults, synchronous reset
     # (ASYNC_RST_EN=0) and a wider window (ADDRW=8). Logs are <test>.log,
     # <test>-sync.log and <test>-addrw8.log, so ../bin/parse_results counts each
-    # build as a separate test.
+    # build as a separate test. OPEN_TESTS also run in an "open" build
+    # (MDELEG_RST=9'h001, every MDELEG field off its default); the other tests
+    # are directed against the default reset value.
     TESTS="simple_rdwr pipelined_rdwr mdeleg_w_error mdeleg_wo_error mdeleg_no_alias \
            denied_unmapped_ro denied_narrow hsize_oversize bus_stall_hsel \
            burst_busy_seq error_hold reset_mid_transfer rw_data_walk \
-           ro_input_walk addrw8_upper_window ro_writes_hprot mdeleg_lanes"
+           ro_input_walk addrw8_upper_window ro_writes_hprot mdeleg_lanes \
+           mdeleg_reset"
+    OPEN_TESTS="mdeleg_reset"
     for build in ":" "-sync:-D ASYNC_RST_EN=0" "-addrw8:-D ADDRW=8"; do
         suffix="${build%%:*}"
         SIM_EXTRA_DEFINES="${build#*:}"
@@ -54,6 +58,11 @@ for (( ii=0; ii<=$LAST_REGRESSION; ii++ ))
         for t in $TESTS; do
             ../bin/runsim $t                  | tee $LOG_DIR/$t$suffix.log
         done
+    done
+    SIM_EXTRA_DEFINES="-D MDELEG_RST=1"
+    export SIM_EXTRA_DEFINES
+    for t in $OPEN_TESTS; do
+        ../bin/runsim $t                      | tee $LOG_DIR/$t-open.log
     done
     unset SIM_EXTRA_DEFINES
 

@@ -26,6 +26,12 @@
  `define ADDRW 7
 `endif
 
+// MDELEG reset value, an integer holding MDELEG[8:0] (default 271 = 9'h10F).
+// Build-time overridable via `-D MDELEG_RST=1`.
+`ifndef MDELEG_RST
+ `define MDELEG_RST 271
+`endif
+
 module  tb_ahb_periph_example;
 
 //
@@ -34,6 +40,7 @@ module  tb_ahb_periph_example;
 
 parameter            ASYNC_RST_EN = `ASYNC_RST_EN;  // Reset style: 1=asynchronous active-low, 0=synchronous
 parameter            ADDRW        = `ADDRW;         // Peripheral address width
+parameter      [8:0] MDELEG_RST   = `MDELEG_RST;    // MDELEG reset value
 
 // Clock / Reset
 reg                  hresetn;
@@ -166,7 +173,7 @@ assign hsel   = (haddr>=32'h00400000) & (haddr<(32'h00400000 + (32'h1 << ADDRW))
 //
 // AHB PERIPHERAL INSTANCE
 //----------------------------------
-ahb_periph_example #(.ADDRW(ADDRW), .ASYNC_RST_EN(ASYNC_RST_EN)) ahb_periph_example_inst0 (
+ahb_periph_example #(.ADDRW(ADDRW), .ASYNC_RST_EN(ASYNC_RST_EN), .MDELEG_RST(MDELEG_RST)) ahb_periph_example_inst0 (
 
 // AHB CLOCK & RESET
     .hclk_i            ( hclk                   ),

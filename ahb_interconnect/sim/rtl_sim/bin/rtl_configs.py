@@ -23,7 +23,9 @@
 # the same external contract (see doc/ahb_interconnect.md), so each is a top.
 # For the fused variant NR_S_X_ROM=0 is a distinct generate branch (no ROM
 # controller, rom_* ports tied off, rom_dout_i sunk) and is what the FPGA
-# board builds, so it gets its own entry. Each top has a synchronous-reset
+# board builds, so it gets its own entry. X_SRAM_B_APH_REG selects the
+# registered Port-B path of the fused SRAM controller (with and without
+# FIXED_B_PRIO). Each top has a synchronous-reset
 # config: that is the ONLY one that builds the arv_ipdff sync-reset branches,
 # and rules.tcl enforces the opposite reset rule for it.
 #----------------------------------------------------------------------------
@@ -40,4 +42,8 @@ CONFIGS = [
     ("fused_default",      "ahb_interconnect_fused",   {}),                        # NR_S_X_ROM=1, NR_S_X_SRAM=1, NR_S_NX=3
     ("fused_norom",        "ahb_interconnect_fused",   {"NR_S_X_ROM": 0}),         # No ROM slot: ROM_ABSENT_TIEOFF branch (FPGA board)
     ("fused_syncrst",      "ahb_interconnect_fused",   {"ASYNC_RST_EN": 0}),
+    ("fused_breg",         "ahb_interconnect_fused",   {"NR_S_X_ROM": 0,           # Registered Port B on the SRAM controller
+                                                        "X_SRAM_B_APH_REG": "32'h1"}),  # (the FPGA board's program memory)
+    ("fused_breg_fixb",    "ahb_interconnect_fused",   {"X_SRAM_B_APH_REG": "32'h1",
+                                                        "FIXED_B_PRIO": "1'b1"}),
 ]

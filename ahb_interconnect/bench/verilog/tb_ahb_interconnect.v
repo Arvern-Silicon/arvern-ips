@@ -603,6 +603,9 @@ assign m1_hmaster_tag = {m1_haddr_d[2] & m1_hready, 3'b111};
             .HAUSER_W         ( HAUSER_W                 ),
             .M_NX_HMASTER_TAG ( {4'h0, MGR1_HMASTER_TAG} ),
             .ASYNC_RST_EN     ( ASYNC_RST_EN             ),
+`ifdef FUSED_B_APH_REG
+            .X_SRAM_B_APH_REG ( 32'h1                    ),
+`endif
 `ifdef FUSED_FIXED_B_PRIO
             .FIXED_B_PRIO     ( 1'b1                     )
 `else
@@ -1604,6 +1607,69 @@ always @(posedge dut_hclk)
    end
 `endif
 
+`ifdef FUSED_B_APH_REG
+//--------------------------------------------------------------------
+// Registered Port B (X_SRAM_B_APH_REG): wait states seen at the fused SRAM
+// controller, counted on free_clk (the managers' clock). Every Port-B access
+// takes one wait state, two when it loses the next cycle to Port A or to a
+// parked write; a Port-A access waits at most two cycles. A Port-B access
+// without a wait state means the registered path is not built.
+//--------------------------------------------------------------------
+integer breg_viol_cnt, breg_b_ws1_cnt, breg_b_ws2_cnt, breg_a_cnt;
+integer breg_b_ws, breg_a_ws;
+reg     breg_b_dph, breg_a_dph;
+initial begin
+   breg_viol_cnt = 0; breg_b_ws1_cnt = 0; breg_b_ws2_cnt = 0; breg_a_cnt = 0;
+   breg_b_ws     = 0; breg_a_ws      = 0; breg_b_dph     = 1'b0; breg_a_dph = 1'b0;
+end
+
+always @(posedge free_clk)
+   if (!hresetn) begin
+      breg_b_dph = 1'b0;
+      breg_a_dph = 1'b0;
+   end else begin
+      // Port B (data): completion first, then a new address phase in the same cycle
+      if (breg_b_dph) begin
+         if (dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.b_hreadyout_o) begin
+            breg_b_dph = 1'b0;
+            if      (breg_b_ws == 1) breg_b_ws1_cnt = breg_b_ws1_cnt + 1;
+            else if (breg_b_ws == 2) breg_b_ws2_cnt = breg_b_ws2_cnt + 1;
+            else begin
+               breg_viol_cnt = breg_viol_cnt + 1;
+               if (breg_viol_cnt <= 8)
+                  $display("ERROR: registered Port B access took %0d wait state(s), expected 1 or 2 %t", breg_b_ws, $time);
+            end
+         end else
+            breg_b_ws = breg_b_ws + 1;
+      end
+      if (dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.b_hsel_i  &
+          dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.b_hready_i &
+          dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.b_htrans_i[1]) begin
+         breg_b_dph = 1'b1;
+         breg_b_ws  = 0;
+      end
+      // Port A (instruction fetch)
+      if (breg_a_dph) begin
+         if (dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.a_hreadyout_o) begin
+            breg_a_dph = 1'b0;
+            breg_a_cnt = breg_a_cnt + 1;
+            if (breg_a_ws > 2) begin
+               breg_viol_cnt = breg_viol_cnt + 1;
+               if (breg_viol_cnt <= 8)
+                  $display("ERROR: Port A access took %0d wait states beside a registered Port B, expected at most 2 %t", breg_a_ws, $time);
+            end
+         end else
+            breg_a_ws = breg_a_ws + 1;
+      end
+      if (dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.a_hsel_i  &
+          dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.a_hready_i &
+          dut.AHB_FUSED_SRAM[0].ahb_fused_sram_ctrl_inst.a_htrans_i[1]) begin
+         breg_a_dph = 1'b1;
+         breg_a_ws  = 0;
+      end
+   end
+`endif
+
 // Subordinate-side HREADY protocol violations (see ahb_waitstate_inserter.v,
 // "a stalling subordinate must see HREADY=0"). Counted inside the wait-state
 // models; folded into `error` at the end of the test.
@@ -1627,6 +1693,15 @@ task collect_hready_violations;
           $display("ERROR: %0d cycle(s) with more than one data-phase owner on a bus", dph_viol_cnt);
           error = error + dph_viol_cnt;
        end
+`ifdef FUSED_B_APH_REG
+     $display("INFO: registered Port B: %0d access(es) with 1 wait state, %0d with 2; %0d Port-A access(es)",
+              breg_b_ws1_cnt, breg_b_ws2_cnt, breg_a_cnt);
+     if (breg_viol_cnt != 0)
+       begin
+          $display("ERROR: %0d fused SRAM access(es) outside the registered Port B wait-state bounds", breg_viol_cnt);
+          error = error + breg_viol_cnt;
+       end
+`endif
   end
 endtask
 

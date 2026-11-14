@@ -90,7 +90,10 @@ executable space; on fused it also answers an `m_x` write.
   arbiter in each fused controller, which costs a wait state only when
   the two ports collide on the same memory or when a data write's data
   phase coincides with a read on either port (the SRAM controller's
-  one-cycle write hold).
+  one-cycle write hold). An SRAM controller built with a registered data
+  port (`X_SRAM_B_APH_REG`) instead adds one wait state to every data
+  access, in exchange for a shorter path from the address decode to the
+  memory.
 
 **Start with `fused`.** Fall back to `hiperf` when an executable memory
 does not fit the fused controller's single-port macro contract
@@ -125,7 +128,7 @@ this table is the index.
 | DPH          | Data phase: the cycle(s) in which `hwdata` / `hrdata` are valid, one cycle after the APH, extended by wait states (`hready = 0`). |
 | NONSEQ / SEQ | `htrans = 2'b10` / `2'b11`: a new transfer / the continuation of a burst. |
 | IDLE / BUSY  | `htrans = 2'b00` / `2'b01`: no transfer / a pause inside a burst. Both are answered with a zero-wait OKAY. |
-| HAUSER       | AHB user-defined sideband, `HAUSER_W` bits wide. The aRVern peripherals use it as the secure-mode signal `hsmode`; the fabric only forwards it. |
+| HAUSER       | AHB user-defined sideband, `HAUSER_W` bits wide. The aRVern peripherals use it as the supervisor-mode signal `hsmode`; the fabric only forwards it and filters no privilege. |
 | X / NX       | Executable / non-executable: the two address-space partitions of the hiperf and fused variants. |
 | Level-2 channel | Hiperf only: the pair of `ahb_manager_if` instances (one fed by `m_x`, one by the non-executable bus) and the `ahb_arbiter_2m` in front of each executable subordinate. Internal to the fabric. |
 
@@ -241,11 +244,32 @@ lost the previous one (the SRAM controller's priority bit also advances
 on uncontested grants, so the winner is not a strict alternation); `1`
 always serves Port B, which removes `a_hsel_i` from the Port-B leg of
 the memory-address mux at the cost of letting heavy non-executable
-traffic starve instruction fetch.
+traffic starve instruction fetch (not on an SRAM controller with a
+registered Port B, see below).
+
+`X_SRAM_B_APH_REG` (one bit per SRAM controller) registers that
+controller's Port-B address phase: every data access is cached in the
+cycle it is presented and served from the cache one cycle later at the
+earliest. A data access takes one wait state, two when that next cycle
+goes to a Port-A fetch or to the restore of a parked write (below). In
+exchange the macro's address, write strobes and the arbiter see only
+flops on Port B: the decoder and the manager's address path end at
+those flops (and at `hclk_en_o`) instead of the macro, which is what a
+large banked memory needs when that path limits the clock.
+
+Port A keeps its own timing. A Port-B request reaches the arbiter one
+cycle after its address phase, so a Port-A fetch presented in the same
+cycle is served first under either `FIXED_B_PRIO` policy, except when
+that cycle restores a parked write: both ports then wait, and the next
+contest follows `FIXED_B_PRIO`. Port B is granted at most every other
+cycle, so a fetch waits at most two cycles, even with `FIXED_B_PRIO = 1`.
+For the same reason Port B never reads in a write's data phase: on such
+a controller only a Port-A read parks a write, and the Port-B
+forwarding described below is not used.
 
 A Port-B write whose data phase collides with a read **on either port**
 — the pause is port-agnostic, so a pipelined Port-B write→read triggers it
-too — is held in a one-word buffer and written to the macro in the very next
+too, unless Port B is registered — is held in a one-word buffer and written to the macro in the very next
 cycle, during which neither port is granted. So a write reaches the macro at
 most one cycle after its data phase whatever the traffic pattern. The port
 that loses a contest in a write's data phase takes **two** wait states, not
@@ -341,6 +365,7 @@ symmetrically to its `s_*[i]` port group.
 | fused   | `NR_S_NX`      | `3`     | Number of non-executable subordinates. |
 | fused   | `M_NX_HMASTER_ID`, `M_NX_HMASTER_TAG` | all-zero | As hiperf. |
 | fused   | `FIXED_B_PRIO` | `0`     | Arbitration inside the fused controllers: `0` the port that lost the previous contest wins the next (Port A first after reset), `1` Port B (data) always wins. |
+| fused   | `X_SRAM_B_APH_REG` | `32'h0` | Bit *j*: SRAM controller *j* registers its Port-B (data) address phase — one wait state per data access, two when it loses the next cycle to Port A or to a parked write; the macro address off the decoder path ([Fused fabric](#fused-fabric)). |
 
 ---
 
@@ -671,7 +696,10 @@ non-executable manager. With `FIXED_B_PRIO = 0` the priority flop
 resets to "Port A first", so Port A is served and Port B is held for one
 cycle; later contests go to the port that lost the previous one (the
 SRAM controller's priority bit also advances on uncontested grants, so
-the winner is not a strict alternation).
+the winner is not a strict alternation). An SRAM controller with a
+registered Port B (`X_SRAM_B_APH_REG`) has no such same-cycle contest:
+its Port B requests from the cache one cycle later ([Fused
+fabric](#fused-fabric)).
 
 ![Fused Port-A/B contention](img/fused_contention.svg)
 
@@ -692,11 +720,14 @@ sim/rtl_sim/run/waivers_fused.vlt
 
 `run_lint` applies them automatically; its parameter sweep is the list
 inside the script (every top at `NR_M = 1` and at its maximum, plus the
-ROM-less fused fabric). VC Static waivers are under `lint/vc_static/`;
-that flow (`run_vclint`, see its README) sweeps the seven configurations
+ROM-less fused fabric, alone and with a registered Port B and synchronous
+reset, and a registered Port B with `FIXED_B_PRIO = 1`). VC Static waivers are under `lint/vc_static/`;
+that flow (`run_vclint`, see its README) sweeps the nine configurations
 of `sim/rtl_sim/bin/rtl_configs.py` — `generic` / `hiperf` / `fused` each
 at its defaults and with synchronous reset, plus `fused_norom`
-(`NR_S_X_ROM = 0`).
+(`NR_S_X_ROM = 0`), `fused_breg` (`NR_S_X_ROM = 0`,
+`X_SRAM_B_APH_REG = 1`) and `fused_breg_fixb` (`X_SRAM_B_APH_REG = 1`,
+`FIXED_B_PRIO = 1`).
 
 ---
 
@@ -882,7 +913,7 @@ cd sim/rtl_sim/run
 ../bin/runsim arbiter_stress -arb_parked        # bench arbiter parks its grant on manager 0
 ../bin/runsim simple_rdwr -seed 12345           # replay a seed
 
-./run_all                                       # full regression, 113 runs
+./run_all                                       # full regression, 130 runs
 ./run_all 5                                     # five iterations, different seeds
 ./run_default_subordinate                       # unit bench, default subordinate
 ./run_fused_rom [rr|fixb]                       # unit bench, fused ROM controller
@@ -892,13 +923,19 @@ cd sim/rtl_sim/run
 A run passes when its log ends with `SIMULATION PASSED`; `run_all`
 collects the results and a replay command per test under `log/`.
 
-`run_all` performs 113 runs: 108 fabric runs and the five unit-bench
+`run_all` performs 130 runs: 125 fabric runs and the five unit-bench
 passes. The fabric runs cover most tests with and without wait states
 (`addr_walk`, `addr_walk_contended`, `default_subordinate_stress`,
 `fused_write_commit`, `fused_x_write`, `hprot_sweep` and `subordinate_error`
 without), the generic arbitration tests also with the parking arbiter,
 the fused tests (`fused_x_write` excepted) also with `FIXED_B_PRIO = 1`,
-and a subset of each variant with synchronous reset (`ASYNC_RST_EN = 0`).
+the fused tests with the registered Port B (`X_SRAM_B_APH_REG`, a subset
+also with wait states and `FIXED_B_PRIO = 1`),
+and a subset of each variant with synchronous reset (`ASYNC_RST_EN = 0`),
+the registered Port B included.
+With the registered Port B the bench also checks every access to the
+fused SRAM controller: one or two wait states on Port B, at most two on
+Port A.
 `./run_all -cov` runs the same list under Verilator for line / branch /
 toggle coverage (`sim/rtl_sim/run/cov/`, waivers in `waivers_cov.md`).
 
@@ -908,10 +945,10 @@ toggle coverage (`sim/rtl_sim/run/cov/`, waivers in `waivers_cov.md`).
 |-------------------------------|--------|
 | `simple_rdwr`                 | Non-pipelined byte / halfword / word reads and writes; byte enables. All variants. |
 | `pipelined_rdwr`              | Back-to-back reads and writes at one transfer per cycle. All variants. |
-| `pipelined_advanced`          | Pipelined single-manager reads and writes across every subordinate, including a same-word read-after-write on the SRAM (fused: through the SRAM controller's forwarding path). One manager at a time, so no contention. All variants; also run under the parking arbiter and random wait states. |
+| `pipelined_advanced`          | Pipelined single-manager reads and writes across every subordinate, including a same-word read-after-write on the SRAM (fused: through the SRAM controller's forwarding path, or through the macro with a registered Port B). One manager at a time, so no contention. All variants; also run under the parking arbiter and random wait states. |
 | `simple_arbiter`              | Three managers contending through the external arbiter, first spaced, then pipelined. Generic. |
 | `hiperf_arbiter`              | Executable and non-executable managers contending for an executable subordinate through its level-2 channel. Hiperf. |
-| `fused_arbiter`               | Port A versus Port B contention on the fused controllers under the arbitration scheme of the build (`run_all` runs it with and without `-fixed_b_prio`), including a back-to-back phase where Port A streams SRAM reads against two managers streaming SRAM writes, with Port-A data checked, and a directed first-contest check of the winner. Fused. |
+| `fused_arbiter`               | Port A versus Port B contention on the fused controllers under the arbitration scheme of the build (`run_all` runs it with and without `-fixed_b_prio`, and with `-fused_b_reg`, where Port A wins the first contest under either scheme), including a back-to-back phase where Port A streams SRAM reads against two managers streaming SRAM writes, with Port-A data checked, and a directed first-contest check of the winner. Fused. |
 | `fused_write_commit`          | A data write to executable SRAM under a continuous fetch stream reaches the macro within a bounded number of cycles and later fetches read it. Fused, both arbitration schemes. |
 | `fused_x_write`               | A write from the executable manager is answered with ERROR and leaves the memory untouched. Fused. |
 | `arbiter_stress`              | Randomised traffic from all managers, 60 transfers each with random gaps. Every ROM and SRAM read is checked inline: the SRAM is split into per-manager windows (M1, M2 read back their own writes, half the time the word just written; M0 reads a preloaded window), all contending for the same controller. All variants. |
@@ -920,7 +957,7 @@ toggle coverage (`sim/rtl_sim/run/cov/`, waivers in `waivers_cov.md`).
 | `size_align_contest`          | Byte / halfword / word accesses at every offset while managers contend, so transfers are replayed after a delayed grant; lane-by-lane checks and a shadow model. Fused: Port-B sub-word writes losing to Port-A reads (buffered writes). All variants; also with the parking arbiter. |
 | `hiperf_arb_contests`         | Directed contests on an executable subordinate: first collision after reset, lone grants moving the priority, repeated collisions. Hiperf. |
 | `fused_rom_contest`           | ROM Port-A / Port-B contention at fabric level, both arbitration schemes, and ROM writes answered ERROR while Port-A reads continue. Fused. |
-| `midrun_reset`                | Reset asserted during a stalled data phase, with a cached address phase, a buffered fused write and the first ERROR cycle; the bus comes out idle and every manager recovers. All variants, both reset styles. |
+| `midrun_reset`                | Reset asserted during a stalled data phase, with a cached address phase, a buffered fused write and the first ERROR cycle; the bus comes out idle and every manager recovers. All variants, both reset styles; the fused one also with a registered Port B. |
 | `xdflt_pipeline`              | A pipelined `m_x` sequence through the executable side: writes, reads, unmapped and out-of-decoder accesses, while the other managers stream traffic. Hiperf, fused. |
 | `addr_walk`                   | Walking-ones and walking-zeros unmapped addresses (bits 2..31) and write data, read and write, from every manager; each access must get exactly one ERROR response. All three variants. |
 | `addr_walk_contended`         | The `addr_walk` addresses from the three managers at once, pipelined, so walking address phases are cached and replayed; interleaved in-window walks of bits 2..10 (SRAM write / read back, ROM reads) prove the replayed addresses by their data. Per manager: completions in issue order, exactly one ERROR per unmapped access. All three variants. |
@@ -946,7 +983,14 @@ everywhere. `run_fused_sram -seed N` pins the random seed.
 
 Under `FIXED_B_PRIO = 1`, the tests that need both ports served fairly
 are compiled out (`ifndef FUSED_FIXED_B_PRIO`) and the Port-A wait bound
-is not checked: starving Port A is that mode's documented behaviour.
+is not checked: starving Port A is that mode's documented behaviour. With a
+registered Port B, Port A cannot be starved, and the bench bounds its
+wait to two cycles in that build.
+
+The expected wait-state counts and collision windows of
+`tb_ahb_fused_sram_ctrl` assume a zero-wait Port B, so the registered
+Port B (`X_SRAM_B_APH_REG`) is verified on the fabric bench instead
+(`runsim -fused_b_reg`, macro `FUSED_B_APH_REG`).
 
 ---
 

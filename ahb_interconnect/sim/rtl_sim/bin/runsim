@@ -20,6 +20,7 @@ design="GENERIC"
 wait_state="ZERO_WS"
 priority_mode=""
 arb_arg=""
+breg_arg=""
 while [[ $# -gt 0 ]]; do
     key="$1"
     shift
@@ -45,6 +46,11 @@ while [[ $# -gt 0 ]]; do
             export SIM_EXTRA_DEFINES
             arb_arg="-arb_parked "
             ;;
+        -fused_b_reg)
+            SIM_EXTRA_DEFINES="${SIM_EXTRA_DEFINES:-} -D FUSED_B_APH_REG"
+            export SIM_EXTRA_DEFINES
+            breg_arg="-fused_b_reg "
+            ;;
         *)
             testname="$key"
             ;;
@@ -57,7 +63,7 @@ done
 ###############################################################################
 if [ "$testname" == "" ]; then
   echo "ERROR	 : missing argument"
-  echo "USAGE	 : runsim <test name> [-seed <seed_nr>] [-hiperf | -fused [-fixed_b_prio]] [-random_ws] [-arb_parked]"
+  echo "USAGE	 : runsim <test name> [-seed <seed_nr>] [-hiperf | -fused [-fixed_b_prio] [-fused_b_reg]] [-random_ws] [-arb_parked]"
   echo "           -arb_parked : bench arbiter parks the grant on default master M0 when idle"
   echo "Example	 : runsim simple_rdwr"
   echo ""
@@ -151,5 +157,5 @@ fi
 trimmed_seed=$(echo "$seed" | xargs)
 echo ""
 echo "REPLAY:"
-echo "        ../bin/runsim ${design_arg}${priority_arg}${random_arg}${arb_arg}-seed ${trimmed_seed}  ${testname}"
+echo "        ../bin/runsim ${design_arg}${priority_arg}${breg_arg}${random_arg}${arb_arg}-seed ${trimmed_seed}  ${testname}"
 echo ""

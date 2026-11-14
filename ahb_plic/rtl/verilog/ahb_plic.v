@@ -373,10 +373,11 @@ endgenerate
 
 
 //=============================================================================
-// 10) TARGET RDATA / PULSE OR-REDUCTION
+// 10) TARGET RDATA / READY / PULSE REDUCTION
 //=============================================================================
 
 reg  [31:0] tgt_rdata_or;
+reg         tgt_ready_and;
 reg         claim_pulse_acc;
 reg  [10:0] claim_id_acc;
 reg         complete_pulse_acc;
@@ -384,12 +385,14 @@ reg  [10:0] complete_id_acc;
 integer     ti;
 always @(*) begin
     tgt_rdata_or       = 32'h0;
+    tgt_ready_and      = 1'b1;
     claim_pulse_acc    = 1'b0;
     claim_id_acc       = 11'h0;
     complete_pulse_acc = 1'b0;
     complete_id_acc    = 11'h0;
     for (ti = 0; ti < NUM_CONTEXTS; ti = ti + 1) begin
         tgt_rdata_or       = tgt_rdata_or       | tgt_rdata[ti];
+        tgt_ready_and      = tgt_ready_and      & tgt_ready[ti];
         claim_pulse_acc    = claim_pulse_acc    | tgt_claim_p[ti];
         claim_id_acc       = claim_id_acc       | tgt_claim_id[ti];
         complete_pulse_acc = complete_pulse_acc | tgt_compl_p[ti];
@@ -434,7 +437,7 @@ wire in_err_p1 = access_denied & (err_state == ERR_IDLE);  // first error cycle
 wire in_err_p2 =                 (err_state == ERR_P2  );  // second error cycle
 
 assign hresp_o     =  in_err_p1 | in_err_p2;
-assign hreadyout_o = ~in_err_p1 ;                          // stall in P1, release in P2
+assign hreadyout_o = ~in_err_p1 & tgt_ready_and;           // stall in P1, release in P2; claim-read wait state
 
 
 //=============================================================================
@@ -539,12 +542,10 @@ assign               in_service0_unused      = in_service_flat[0];
 wire                 en_ready_unused;
 assign               en_ready_unused         = en_ready;
 
-wire                 tgt_ready_unused  [0:NUM_CONTEXTS-1];
 wire          [10:0] tgt_top_id_unused [0:NUM_CONTEXTS-1];
 
 generate
     for (gctx = 0; gctx < NUM_CONTEXTS; gctx = gctx + 1) begin : G_TGT_LINT
-        assign       tgt_ready_unused [gctx] = tgt_ready[gctx];
         assign       tgt_top_id_unused[gctx] = tgt_top_id[gctx];
     end
 endgenerate

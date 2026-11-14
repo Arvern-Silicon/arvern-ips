@@ -69,7 +69,7 @@ integrator, on the clock named in
 | `NUM_HARTS`       | `1`     | `1..16`      | Number of harts. Match `ahb_aclint`'s `NUM_HARTS`. `NUM_HARTS ≤ 16` keeps `NUM_CONTEXTS ≤ 32`, the capacity of the 4 KB enable window. |
 | `SU_MODE_EN`      | `0`     | `0` or `1`   | Instantiate a per-hart S-mode context. Match the core's `SU_MODE_EN` (same default). When `0`, contexts are numbered `ctx = hart`, context indices `>= NUM_HARTS` are RAZ/WI and `irq_s_external_o` is tied `0`. |
 | `PRIO_BITS`       | `3`     | `1..7`       | Priority width per source; `2^PRIO_BITS - 1` is the highest priority. `PRIO_BITS=1` is a two-level "enabled / disabled" mode for area-sensitive integrations. |
-| `PRIV_CHECK_EN`   | `1`     | `0` or `1`   | IP-level privilege filter using `hprot_i[1]` + `hsmode_i`, policy in [Access control](#access-control). When `0`, the privilege check is skipped (the integrator relies on a fabric-level check); the size check stays active. |
+| `PRIV_CHECK_EN`   | `1`     | `0` or `1`   | IP-level privilege filter using `hprot_i[1]` + `hsmode_i`, policy in [Access control](#access-control). When `0`, the privilege check is skipped and the PLIC is open to every mode (`ahb_interconnect` filters no privilege); the size check stays active. |
 | `ASYNC_RST_EN`    | `1`     | `0` or `1`   | Reset style: `1` = asynchronous active-low assertion, `0` = synchronous. Threaded to every flop through the shared `arv_ipdff` primitive; see [`README.md`](../../README.md#reset-architecture). |
 
 > **Parameter ranges are the contract.** Simulation and lint reject an
@@ -95,9 +95,11 @@ ahb_plic
 (`plic_priority`, `plic_pending`, `plic_enable`) are instantiated once
 each; `plic_target` is instantiated in a `generate` loop, one per
 context — `NUM_HARTS` M-contexts when `SU_MODE_EN=0`, `2*NUM_HARTS`
-contexts alternating M/S per hart when `SU_MODE_EN=1`. Every sub-block
-answers in one cycle (`reg_ready_o` tied high), so every accepted
-transfer completes with zero wait states.
+contexts alternating M/S per hart when `SU_MODE_EN=1`. Every accepted
+transfer completes with zero wait states, except a claim read, which takes
+one: `plic_target` registers the claim winner before it reaches
+`hrdata_o`, so the arbiter tree is not on the bus's read-data path
+([Claim / Complete handshake](#claim--complete-handshake)).
 
 ---
 
@@ -213,14 +215,18 @@ the stride is RAZ/WI.
 | Offset                          | Register              | Behaviour |
 |---------------------------------|-----------------------|-----------|
 | `0x200000 + 0x1000*ctx + 0x0`   | `threshold[ctx]`      | RW, `PRIO_BITS` wide (upper bits RAZ/WI). The context is notified only of sources whose priority is **strictly greater** than the threshold; `threshold = 2^PRIO_BITS - 1` masks every source. |
-| `0x200000 + 0x1000*ctx + 0x4`   | `claim_complete[ctx]` | **Read = claim**: returns the ID of the highest-priority pending-and-enabled source for this context, or 0 if there is none — independent of the threshold (Chapter 8) — and on the same clock edge sets `in_service[id]` and clears `pending[id]`. **Write = complete**: a write is a completion only when the **whole 32-bit word** is an ID in `1..NUM_SOURCES` (any bit above `[10]` set makes it invalid, not an alias of its low bits) **and** that source is enabled for this context (Chapter 9); it then clears `in_service[N]`. Any other write is ignored with OKAY. |
+| `0x200000 + 0x1000*ctx + 0x4`   | `claim_complete[ctx]` | **Read = claim**: returns the ID of the highest-priority pending-and-enabled source for this context, or 0 if there is none — independent of the threshold (Chapter 8) — and on the clock edge that completes the read (one wait state) sets `in_service[id]` and clears `pending[id]`. **Write = complete**: a write is a completion only when the **whole 32-bit word** is an ID in `1..NUM_SOURCES` (any bit above `[10]` set makes it invalid, not an alias of its low bits) **and** that source is enabled for this context (Chapter 9); it then clears `in_service[N]`. Any other write is ignored with OKAY. |
 | other offsets in the stride     | reserved              | RAZ/WI |
 
 > **Claim atomicity.** The claim read returns its ID and performs the
 > `in_service[id] ← 1` / `pending[id] ← 0` update on the same clock edge,
 > the one that completes the AHB data phase. There is no intermediate
 > state: the next bus cycle observes both the returned ID and the cleared
-> pending bit.
+> pending bit. The ID is the winner registered in the first cycle of the
+> data phase; no other access reaches the PLIC during the wait state, so
+> that source is still pending when the claim takes effect, and a source
+> that becomes pending during the wait state is treated as arriving after
+> the claim.
 
 ### Access control
 
@@ -238,9 +244,10 @@ accepted beat by beat, each beat landing exactly as a single transfer
 would; a beat is denied only when it is not word-sized or fails the
 privilege filter.
 
-**Privilege filter (`PRIV_CHECK_EN=1`).** Defence in depth on top of any
-fabric-level policy: a misbehaving master cannot corrupt PLIC state even
-if the fabric's decoder lets it through. The privilege of a transfer is
+**Privilege filter (`PRIV_CHECK_EN=1`).** The PLIC's own protection:
+`ahb_interconnect` forwards the privilege sideband but filters nothing, so
+this filter is what keeps a less-privileged master away from PLIC state.
+The privilege of a transfer is
 decoded from `hprot_i[1]` and `hsmode_i` (the aRVern AHB dialect):
 
 | `hprot_i[1]` | `hsmode_i` | Privilege |
@@ -275,9 +282,9 @@ the `HAUSER` sideband) every privileged access decodes as M and the
 S-mode column collapses onto the M-mode column — see
 [Integration requirements](#integration-requirements).
 
-**Disabling the filter.** Set `PRIV_CHECK_EN=0` if the fabric already
-enforces a privilege policy at its address decoder, or if the integration
-has no privilege control. `hprot_i` and `hsmode_i` remain inputs (wire
+**Disabling the filter.** Set `PRIV_CHECK_EN=0` only if something else in
+the SoC enforces a privilege policy on this window (`ahb_interconnect` does
+not), or if the integration has no privilege control. `hprot_i` and `hsmode_i` remain inputs (wire
 them up) but do not take part in the decision. **The size check remains
 active.**
 
@@ -365,13 +372,14 @@ threshold. `hclk_en_o` is a separate OR-reduce over the sources.
 
 ### Claim / Complete handshake
 
-A read of `claim_complete[ctx]`:
+A read of `claim_complete[ctx]` has a two-cycle data phase:
 
-1. The data phase returns the claim arbiter's winner for `ctx`,
-   zero-extended to 32 bits (0 if none).
-2. On the clock edge completing the data phase, `plic_target` pulses the
-   claim with that ID and `plic_pending` applies it:
-   `in_service[id] ← 1`, `pending[id] ← 0`.
+1. First cycle: `hreadyout_o` is 0 and `plic_target` registers the claim
+   arbiter's winner for `ctx` (0 if none).
+2. Second cycle: `hreadyout_o` is 1 and the data phase returns the
+   registered ID, zero-extended to 32 bits. On the clock edge completing
+   the data phase, `plic_target` pulses the claim with that ID and
+   `plic_pending` applies it: `in_service[id] ← 1`, `pending[id] ← 0`.
 
 A write of `claim_complete[ctx]` with data `N`:
 
@@ -435,7 +443,7 @@ pending-and-enabled source for that context, or 0 if there is none.
 | in        | `hready_i`           | 1               | Bus ready in (the fabric's `HREADY`), see [Integration requirements](#integration-requirements) |
 | in        | `hwdata_i`           | 32              | Write data |
 | out       | `hrdata_o`           | 32              | Read data; 0 on a denied read |
-| out       | `hreadyout_o`        | 1               | `1` except in the first cycle of an ERROR response; `1` during reset |
+| out       | `hreadyout_o`        | 1               | `1` except in the first cycle of an ERROR response and of a claim read; `1` during reset |
 | out       | `hresp_o`            | 1               | `1` for both cycles of the ERROR response of a denied access |
 | in        | `irq_src_i`          | `NUM_SOURCES+1` | Interrupt source levels; bit `[s]` is source `s`, bit `[0]` is reserved and ignored |
 | out       | `irq_m_external_o`   | `NUM_HARTS`     | M-mode external interrupt per hart (core `irq_m_external_i`) |
@@ -508,7 +516,7 @@ level.
 | `hclk_i` / ICG | Gate from `hclk_en_o` with a latch-based ICG (`arv_cgate`) whose enable is `hclk_en_o \| ~hresetn_i`. A free-running `hclk_i` is equally correct. | A combinational AND exposes `hclk_en_o` glitches to clock pins; a gate closed during reset never initialises a sync-reset build. |
 | `irq_src_i` | Each bit is a level synchronous to the free-running clock from which `hclk_i` is gated (same edge). Any flop or synchroniser feeding it — [`arv_synchronizer`](../../arv_primitives/rtl/verilog/arv_synchronizer.v) for a foreign-clock source — is clocked by that free-running clock (or an always-on clock), **never by the PLIC's gated `hclk_i`**: the wake path `pin → irq_src_i → hclk_en_o` must lie entirely outside the gated domain. The gateway samples the pin directly; there is no synchroniser in the IP. | A synchroniser on the gated `hclk_i` never clocks while `hclk_en_o = 0`, so an asynchronous source can never wake a gated PLIC; the interrupt is lost until unrelated traffic reopens the clock. |
 | `hsmode_i` | Connect to the fabric's `HAUSER` sideband (`data_hsmode_o` of an aRVern core). Without such a sideband, tie `hsmode_i = 0`. | With `hsmode_i = 0` every privileged access decodes as M: the S-mode rows of the access policy degrade to the M-mode rows and only U-mode denial remains. A debugger through the core's SBA presents as M (`hprot[1]=1, hsmode=0`) and is never locked out. |
-| `hready_i` | Connect to the fabric's `HREADY` (the AND of all subordinates' `HREADYOUT`, as the interconnect builds it), which during the PLIC's own data phase equals its `hreadyout_o`. Never tie it high. | Tied high, a transfer issued while another subordinate stalls the bus is taken as accepted. The claim is a level on the held data phase: a fabric that lowers `hready_i` during the PLIC's data phase — off-spec for AHB-Lite — would claim a new source on every extended cycle and return only the last ID. The IP does not guard against this. |
+| `hready_i` | Connect to the fabric's `HREADY` (the AND of all subordinates' `HREADYOUT`, as the interconnect builds it), which during the PLIC's own data phase equals its `hreadyout_o`. Never tie it high. | Tied high, a transfer issued while another subordinate stalls the bus is taken as accepted. The claim follows the held data phase: a fabric that lowers `hready_i` during the PLIC's data phase — off-spec for AHB-Lite — would claim a new source every second extended cycle and return only the last ID. The IP does not guard against this. |
 | `hsize_i`, `htrans_i`, `haddr_i[1:0]` | Word transfers only; NONSEQ and SEQ both start an access, so word bursts are accepted beat by beat; IDLE and BUSY are ignored; `haddr_i[1:0]` is not decoded. | A non-word beat gets the two-cycle ERROR; a misaligned word address aliases onto its containing word. |
 | `irq_src_i[0]` | Reserved; tie to `0` or `1`. | None — the bit is ignored. |
 | Parameters | Keep every parameter inside the table's range; only simulation and lint check it. | Synthesis silently builds a broken netlist (see [Design parameters](#design-parameters)). |
@@ -556,7 +564,7 @@ the test:
 
 `bench/verilog/cover_monitor.v` raises a sticky bin the first time each
 condition is seen (interrupt outputs high, `hclk_en_o` in both states,
-ERROR and size-denial, pending / in-service / claim / complete activity,
+ERROR and size-denial, the claim-read wait state, pending / in-service / claim / complete activity,
 priority-0 and threshold masking, a source above 31) and prints
 `COVERAGE HIT: <bin>` at the end of every run. `./run_all -sweep` unions
 the hits across all configs and **fails the sweep** when a bin in
@@ -569,7 +577,7 @@ bench defines and the test list of each simulation config:
 
 | Sim config     | Defines (bench)                          | Tests |
 |----------------|------------------------------------------|-------|
-| `default`      | bench defaults (`SU_MODE_EN=1`)          | the 27 default tests |
+| `default`      | bench defaults (`SU_MODE_EN=1`)          | the 28 default tests |
 | `nh2`          | `NUM_HARTS=2`                            | `priority_rdwr`, `enable_rdwr`, `unmapped_access`, `multihart_routing`, `priv_contexts`, `context_walk`, `addr_walk` |
 | `nh4`          | `NUM_HARTS=4`                            | `priority_rdwr`, `enable_rdwr`, `unmapped_access`, `multihart_routing`, `priv_contexts`, `context_walk`, `addr_walk` |
 | `su0`          | `SU_MODE_EN=0`                           | `priority_rdwr`, `pending_gateway`, `threshold_claim`, `unmapped_access`, `su_disabled`, `priv_contexts`, `context_walk`, `addr_walk`, `enable_priority_dynamics` |
@@ -636,11 +644,12 @@ and fails the sweep.
 | `random_irq` | Constrained-random priorities, enables, threshold and source vector with interleaved claim/complete on the claimed ID; correctness comes from the scoreboard, a fresh seed per run. | `default`, `ns127_pb7`, `ns40_pb1`, `sync_rst` |
 | `source_walk` | Every source end to end through ctx 0 (priority read-back, output, its own pending bit only, claim, complete); ascending and descending priority ladders with every line high claimed to exhaustion in the arbiter's order; every priority and enable bit set then cleared; source 0 never pends. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
 | `context_walk` | Every context in turn: its whole enable block written all-ones (implemented bits read back, reserved words RAZ) then all-zeros; sources 1, 2, 4, …, 64, `NUM_SOURCES` and `NUM_SOURCES` with one bit cleared each alone on the context: exactly its mapped output rises, its claim returns the ID, a complete through a context not enabling the source is ignored (no re-pend while the line is high), the complete through its own context is accepted. | `nh2`, `nh4`, `su0`, `nh2_su0`, `ns63_pb4`, `ns127_pb7`, `nh4_ns63_pb4` |
-| `addr_walk` | Walking one and walking zero over `haddr[21:2]` plus reserved target, priority, pending and enable offsets, each classified from the address map and checked from M, S and U mode against the access table; `hprot` `4'hF` / `4'hD` decode as `4'h2` / `4'h0`; `hsize` `3'b100`..`3'b111` denied; a misaligned word address lands on its containing word. | all 11 |
+| `addr_walk` | Walking one and walking zero over `haddr[21:2]` plus reserved target, priority, pending and enable offsets, each classified from the address map and checked from M, S and U mode against the access table (an admitted claim read with its wait state); `hprot` `4'hF` / `4'hD` decode as `4'h2` / `4'h0`; `hsize` `3'b100`..`3'b111` denied; a misaligned word address lands on its containing word. | all 11 |
 | `reset_in_operation` | A line high across reset release pends on the first edge after it; reset with live priorities, enables, thresholds, pending and in-service state gives `hreadyout=1`, `hresp=0`, outputs 0, and every register at 0 after release with the high lines re-pending; source 0 toggling pends nothing and leaves `hclk_en_o` low. | `default`, `sync_rst` |
 | `threshold_extremes` | Priority `2^PRIO_BITS-1` under threshold `2^PRIO_BITS-1` is masked but still claimed, under `2^PRIO_BITS-2` it interrupts (sources 1, 64 and `NUM_SOURCES`); all-ones writes to every threshold and a priority read back `2^PRIO_BITS-1`. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
 | `enable_priority_dynamics` | Clearing the enable or zeroing the priority of a pending source drops the output and the claim while the pending bit stays; a complete after the enable is cleared is dropped, the source stays in service until re-enabled and completed. | `default`, `su0` |
-| `claim_complete_pipelined` | Back-to-back transfers: claim via ctx 0 then ctx 1 (the second gets the next source or 0), complete with the line high then two back-to-back claims (0, then the re-pended source one cycle later), a word claim held behind a size-denied claim read taken exactly once, complete then enable-clear (complete accepted). | `default`, `sync_rst` |
+| `claim_complete_pipelined` | Back-to-back transfers, each claim read with its wait state: claim via ctx 0 then ctx 1 (the second gets the next source or 0), complete with the line high then two back-to-back claims (0, then the re-pended source one cycle later), a word claim held behind a size-denied claim read taken exactly once, complete then enable-clear (complete accepted). | `default`, `sync_rst` |
+| `claim_wait` | Cycle-accurate claim read: `{hresp, hreadyout}` = `0,0` then `0,1` with the ID, pending cleared by the completing edge only; an empty claim stalls and returns 0; a source pending during the wait state is not the one claimed and stays pending; completions and threshold accesses stay zero-wait. | `default`, `sync_rst` |
 | `pair_contests` | Every adjacent pair (2k, 2k+1), k ≥ 1, alone on ctx 0: even ID higher, odd ID higher, then equal (lowest ID wins); winner then loser claimed and completed. With `PRIO_BITS=1` the loser of an unequal contest is at priority 0 and is not claimed until raised to 1. | `default`, `ns63_pb4`, `ns127_pb7`, `ns40_pb1` |
 
 ### Signoff gates

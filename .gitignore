@@ -5,6 +5,7 @@ CLAUDE.md
 build
 fusesoc.conf
 */doc/private/*
+doc/private/
 */doc/*_review*
 
 */sim/rtl_sim/run/simv*
@@ -15,10 +16,11 @@ fusesoc.conf
 */sim/rtl_sim/run/submit_star_flat.f
 */sim/rtl_sim/run/*.vcd
 */sim/rtl_sim/run/log/*
-*/sim/rtl_sim/run/log_lint/*
-*/sim/rtl_sim/run/log_sweep/*
+*/sim/rtl_sim/run/log_*
 */sim/rtl_sim/run/cov/*
-*/sim/rtl_sim/run/cov_archive/*
+*/sim/rtl_sim/run/cov_*
+*/sim/rtl_sim/run/obj_*
+*/sim/rtl_sim/run/work_*
 */sim/rtl_sim/run/*.log
 
 */synthesis/synopsys/*_d
@@ -43,6 +45,3 @@ arv_scope/*
 */lint/vc_static/results
 */lint/vc_static/results_sweep
 */lint/vc_static/*_d
-
-# Not released yet (next IP release)
-ahb_gpio/

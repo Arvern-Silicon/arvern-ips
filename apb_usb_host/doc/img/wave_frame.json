@@ -1,0 +1,10 @@
+{signal: [
+  {name: '1 ms frame',  wave: '2.......2..', data: ['frame n', 'frame n+1']},
+  {name: 'bus',         wave: '=x=x=x=x=x.', data: ['keep-alive', 'IN', 'DATA', 'ACK', 'keep-alive']},
+  {name: 'driven by',   wave: '2x2x3x2x2x.', data: ['host', 'host', 'device', 'host', 'host']},
+  {name: 'usb_oe_o',    wave: '10101.0.10.'}
+],
+  head: {text: 'A poll in RUN: every frame starts with a keep-alive; one transaction at a time, ending before the next keep-alive'},
+  foot: {text: 'a NAK (no new data) or STALL takes the place of DATA and ACK; a missing response is a transaction error, retried in the next frame'},
+  config: {hscale: 2.5}
+}

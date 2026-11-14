@@ -213,7 +213,14 @@ initial
       join
       repeat(10) @(posedge free_clk);
 
-`ifdef FUSED_FIXED_B_PRIO
+`ifdef FUSED_B_APH_REG
+      // A registered Port-B address phase requests one cycle after it is
+      // presented: Port A's same-cycle fetch is granted first, in either scheme
+      if (m0_done_time < m1_done_time)
+         $display("PASS:  Registered Port B: M0 (Port A) granted first -- M0 done @ %0t, M1 done @ %0t", m0_done_time, m1_done_time);
+      else
+         tb_error("Registered Port B expected M0 to finish before M1 ");
+`elsif FUSED_FIXED_B_PRIO
       if (m1_done_time < m0_done_time)
          $display("PASS:  Fixed B-prio scheme: M1 (Port B) won contention -- M1 done @ %0t, M0 done @ %0t", m1_done_time, m0_done_time);
       else

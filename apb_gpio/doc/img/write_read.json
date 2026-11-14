@@ -1,0 +1,22 @@
+{
+  "signal": [
+    { "name": "pclk_i",        "wave": "p......" },
+    [ "APB",
+      { "name": "psel_i",        "wave": "01.01.0" },
+      { "name": "penable_i",     "wave": "0.10.10" },
+      { "name": "paddr_i",       "wave": "x3.x4.x", "data": ["0x1C OUT_TGL", "0x0C INPUT"] },
+      { "name": "pwrite_i",      "wave": "x1.x0.x" },
+      { "name": "pwdata_i",      "wave": "x3.x...", "data": ["0x0000_0001"] },
+      { "name": "pstrb_i",       "wave": "x3.x4.x", "data": ["1111", "0000"] },
+      { "name": "prdata_o",      "wave": "0....40", "data": ["IN"] },
+      { "name": "pslverr_o",     "wave": "0......" }
+    ],
+    [ "Pins",
+      { "name": "gpio_o[0]",     "wave": "0..1..." },
+      { "name": "input register", "wave": "4......", "data": ["IN"] }
+    ],
+    { "name": "pclk_en_o",     "wave": "01.01.0" }
+  ],
+  "head": { "text": "Toggle pin 0 through OUT_TGL, idle cycle, read INPUT: no wait states" },
+  "config": { "hscale": 2 }
+}

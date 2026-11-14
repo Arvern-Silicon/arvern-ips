@@ -1,0 +1,12 @@
+{signal: [
+  {name: 'free clock',         wave: 'pppppppp'},
+  {name: 'psel_i',             wave: '01.0....'},
+  {name: 'penable_i',          wave: '0.10....'},
+  {name: 'transfer ended',     wave: '0..10...'},
+  {name: 'pclk_en_o',          wave: '01..0...'},
+  {name: 'pclk_i (gated)',     wave: 'l.pppl..'}
+],
+  head: {text: 'Clock request, CTRL.EN = 0 and the port OFF: an access and the cycle after it'},
+  foot: {text: 'with CTRL.EN = 1, in any state but OFF, or while the IP drives the bus, pclk_en_o stays high'},
+  config: {hscale: 2.5}
+}

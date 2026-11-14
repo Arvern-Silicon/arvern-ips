@@ -1,0 +1,24 @@
+{
+  "signal": [
+    { "name": "pclk_i",        "wave": "p......" },
+    [ "APB",
+      { "name": "psel_i",        "wave": "01.01.0" },
+      { "name": "penable_i",     "wave": "0.10.10" },
+      { "name": "paddr_i",       "wave": "x3.x4.x", "data": ["0x04", "0x24"] },
+      { "name": "pwrite_i",      "wave": "x1.x0.x" },
+      { "name": "pwdata_i",      "wave": "x3.x...", "data": ["0xCAFE_F00D"] },
+      { "name": "pstrb_i",       "wave": "x3.x4.x", "data": ["1111", "0000"] },
+      { "name": "pprot_i[0]",    "wave": "x1.x1.x" },
+      { "name": "prdata_o",      "wave": "0....40", "data": ["R"] },
+      { "name": "pready_o",      "wave": "1......" },
+      { "name": "pslverr_o",     "wave": "0......" }
+    ],
+    [ "Registers",
+      { "name": "register_01_o", "wave": "2..3...", "data": ["old", "0xCAFE_F00D"] },
+      { "name": "register_09_i", "wave": "4......", "data": ["R"] }
+    ],
+    { "name": "pclk_en_o",     "wave": "01.01.0" }
+  ],
+  "head": { "text": "Machine-mode write to REGOUT_01, idle cycle, read of REGIN_09: no wait states" },
+  "config": { "hscale": 2 }
+}
